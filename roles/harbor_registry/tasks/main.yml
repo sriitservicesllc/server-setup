@@ -1,0 +1,104 @@
+---
+# =============================================================================
+# Role: harbor_registry — Deploy Harbor container registry with Trivy scanner
+# =============================================================================
+
+- name: Create Harbor namespace
+  ansible.builtin.command: kubectl create namespace {{ harbor_namespace }}
+  ignore_errors: true
+  changed_when: true
+
+- name: Create Harbor admin secret
+  ansible.builtin.shell: >
+    kubectl create secret generic harbor-admin-secret
+    --from-literal=password={{ harbor_admin_password }}
+    -n {{ harbor_namespace }}
+    --dry-run=client -o yaml | kubectl apply -f -
+  changed_when: true
+
+- name: Install Harbor via Helm
+  kubernetes.core.helm:
+    name: harbor
+    chart_ref: harbor/harbor
+    chart_version: "{{ harbor_version }}"
+    release_namespace: "{{ harbor_namespace }}"
+    create_namespace: true
+    wait: true
+    wait_timeout: "15m"
+    values:
+      expose:
+        type: ingress
+        tls:
+          enabled: true
+          certSource: secret
+          secret:
+            secretName: harbor-tls
+        ingress:
+          hosts:
+            core: "{{ harbor_hostname }}"
+          className: nginx
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-issuer
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/proxy-body-size: "0"
+            nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+      externalURL: "https://{{ harbor_hostname }}"
+      harborAdminPassword: "{{ harbor_admin_password }}"
+      persistence:
+        enabled: true
+        persistentVolumeClaim:
+          registry:
+            storageClass: "{{ harbor_storage_class }}"
+            size: "{{ harbor_storage_size }}"
+          chartmuseum:
+            storageClass: "{{ harbor_storage_class }}"
+            size: 5Gi
+          jobservice:
+            storageClass: "{{ harbor_storage_class }}"
+            size: 2Gi
+          database:
+            storageClass: "{{ harbor_storage_class }}"
+            size: 5Gi
+          redis:
+            storageClass: "{{ harbor_storage_class }}"
+            size: 2Gi
+          trivy:
+            storageClass: "{{ harbor_storage_class }}"
+            size: 10Gi
+      trivy:
+        enabled: true
+        gitHubToken: ""
+        skipUpdate: false
+        offlineScan: false
+        severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+        ignoreUnfixed: false
+        insecure: false
+      notary:
+        enabled: true
+      chartmuseum:
+        enabled: true
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+          namespace: monitoring
+      updateStrategy:
+        type: RollingUpdate
+
+- name: Wait for Harbor pods to be running
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ harbor_namespace }} --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: harbor_pods
+  until: harbor_pods.stdout | int == 0
+  retries: 60
+  delay: 15
+  changed_when: false
+
+- name: Display Harbor access info
+  ansible.builtin.debug:
+    msg:
+      - "Harbor Registry URL: https://{{ harbor_hostname }}"
+      - "Admin Username: admin"
+      - "Admin Password: {{ harbor_admin_password }}"
+      - "Add '{{ harbor_hostname }}' to your /etc/hosts or DNS!"

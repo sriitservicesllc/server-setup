@@ -1,0 +1,62 @@
+---
+# =============================================================================
+# Role: cert_manager — Automated TLS certificate management
+# Integrates with Let's Encrypt for free production-grade certificates
+# =============================================================================
+
+- name: Install cert-manager via Helm (with CRDs)
+  kubernetes.core.helm:
+    name: cert-manager
+    chart_ref: cert-manager/cert-manager
+    chart_version: "{{ cert_manager_version }}"
+    release_namespace: cert-manager
+    create_namespace: true
+    wait: true
+    wait_timeout: "5m"
+    values:
+      installCRDs: true
+      prometheus:
+        enabled: true
+        servicemonitor:
+          enabled: true
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi
+
+- name: Wait for cert-manager pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n cert-manager --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: certmgr_pods
+  until: certmgr_pods.stdout | int == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Create ClusterIssuers (Let's Encrypt staging + production)
+  ansible.builtin.template:
+    src: cluster-issuers.yaml.j2
+    dest: /tmp/cluster-issuers.yaml
+    mode: "0644"
+
+- name: Apply ClusterIssuers
+  ansible.builtin.command: kubectl apply -f /tmp/cluster-issuers.yaml
+  changed_when: true
+  retries: 5
+  delay: 15
+
+- name: Verify ClusterIssuers are ready
+  ansible.builtin.shell: >
+    kubectl get clusterissuer letsencrypt-prod
+    -o jsonpath='{.status.conditions[0].type}'
+  register: issuer_status
+  until: issuer_status.stdout == "Ready"
+  retries: 15
+  delay: 10
+  changed_when: false
+  ignore_errors: true
+  check_mode: false

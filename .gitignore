@@ -1,0 +1,10 @@
+kubeconfig/
+logs/
+*.retry
+*.log
+*.tmp
+secrets.yml
+inventory/group_vars/vault.yml
+.vault_pass
+*.pem
+*.key

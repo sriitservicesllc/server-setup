@@ -1,0 +1,60 @@
+---
+# =============================================================================
+# Ansible Vault encrypted secrets template
+# Usage:
+#   1. Copy this file to vault.yml:  cp vault.yml.template vault.yml
+#   2. Edit with real values:        nano vault.yml
+#   3. Encrypt:                      ansible-vault encrypt vault.yml
+#   4. Run playbook:                 ansible-playbook site.yml --ask-vault-pass
+# =============================================================================
+
+# ── Container Registry ────────────────────────────────────────────────────────
+harbor_admin_password: "CHANGE_ME_Harbor_Password"
+
+# ── MinIO Object Storage ──────────────────────────────────────────────────────
+minio_root_user: "minioadmin"
+minio_root_password: "CHANGE_ME_MinIO_Password"
+
+# ── Kong API Gateway ──────────────────────────────────────────────────────────
+kong_db_password: "CHANGE_ME_Kong_DB_Password"
+
+# ── Databases ─────────────────────────────────────────────────────────────────
+postgresql_password: "CHANGE_ME_PG_Password"
+mysql_root_password: "CHANGE_ME_MySQL_Password"
+redis_password: "CHANGE_ME_Redis_Password"
+
+# ── Monitoring ────────────────────────────────────────────────────────────────
+grafana_admin_password: "CHANGE_ME_Grafana_Password"
+
+# ── Gitea (email-based auth) ──────────────────────────────────────────────────
+gitea_admin_password: "CHANGE_ME_Gitea_Password"
+gitea_db_password: "CHANGE_ME_Gitea_DB_Password"
+gitea_smtp_password: ""           # Required only if gitea_smtp_enabled: true
+
+# ── Woodpecker CI ─────────────────────────────────────────────────────────────
+woodpecker_agent_secret: "CHANGE_ME_32_char_random_secret"
+woodpecker_gitea_client_id: ""    # Create OAuth app in Gitea UI after Gitea deploys
+woodpecker_gitea_client_secret: ""
+
+# ── ArgoCD ────────────────────────────────────────────────────────────────────
+argocd_admin_password: "CHANGE_ME_ArgoCD_Password"
+
+# ── SonarQube ─────────────────────────────────────────────────────────────────
+sonarqube_admin_password: "CHANGE_ME_SonarQube_Password"
+
+# ── Collaboration ─────────────────────────────────────────────────────────────
+mattermost_admin_password: "CHANGE_ME_Mattermost_Password"
+
+# ── Vault ─────────────────────────────────────────────────────────────
+infisical_db_password: InfisicalDB@Admin1!
+infisical_encryption_key: "8f7d7f1c9f3c3f6f7d2a0d9c4b6e5f1a8c3d7e9f2b4c6d8e1f3a5b7c9d0e2f4"
+infisical_auth_secret: "4b9e7f2c8d1a6e3f9c5b7d0e2f4a8c3d7e1f9b6c4d2a8e5f"
+infisical_jwt_secret: "7d2a0d9c4b6e5f1a8c3d7e9f2b4c6d8e1f3a5b7c9d0e2f4a6b8c1d3e5f7a9c"
+
+# ── Velero OneDrive Backup ────────────────────────────────────────────────────
+# Step 1: Install rclone on your laptop — https://rclone.org/install/
+# Step 2: Run 'rclone config' → choose OneDrive → follow browser OAuth flow
+# Step 3: Copy the values from ~/.config/rclone/rclone.conf
+velero_onedrive_client_id: ""     # Leave blank for personal OneDrive
+velero_onedrive_client_secret: "" # Leave blank for personal OneDrive
+velero_onedrive_token: ""         # Full JSON token blob from rclone config

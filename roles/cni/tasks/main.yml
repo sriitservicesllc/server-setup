@@ -1,0 +1,60 @@
+---
+# =============================================================================
+# Role: cni — Deploy CNI network plugin (Calico or Flannel)
+# =============================================================================
+
+- name: Deploy Calico CNI
+  when: cni_plugin == "calico"
+  block:
+    - name: Apply Calico operator manifest
+      ansible.builtin.command: >
+        kubectl apply --server-side --force-conflicts -f
+        https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml
+      changed_when: true
+
+    - name: Create Calico custom resource manifest
+      ansible.builtin.template:
+        src: calico-installation.yaml.j2
+        dest: /tmp/calico-installation.yaml
+        mode: "0644"
+
+    - name: Apply Calico custom resource
+      ansible.builtin.command: kubectl apply -f /tmp/calico-installation.yaml
+      changed_when: true
+
+    - name: Wait for Calico pods to be ready
+      ansible.builtin.shell: >
+        kubectl get pods -n calico-system --no-headers
+        | grep -v Running | grep -v Completed | wc -l
+      register: calico_pods
+      until: calico_pods.stdout | int == 0
+      retries: 40
+      delay: 15
+      changed_when: false
+
+- name: Deploy Flannel CNI
+  when: cni_plugin == "flannel"
+  block:
+    - name: Apply Flannel manifest
+      ansible.builtin.command: >
+        kubectl apply -f
+        https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      changed_when: true
+
+    - name: Wait for Flannel pods to be ready
+      ansible.builtin.shell: >
+        kubectl get pods -n kube-flannel --no-headers
+        | grep -v Running | grep -v Completed | wc -l
+      register: flannel_pods
+      until: flannel_pods.stdout | int == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+- name: Verify all nodes are Ready
+  ansible.builtin.shell: kubectl get nodes --no-headers | grep -v Ready | wc -l
+  register: not_ready_nodes
+  until: not_ready_nodes.stdout | int == 0
+  retries: 30
+  delay: 15
+  changed_when: false

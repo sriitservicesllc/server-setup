@@ -1,0 +1,130 @@
+---
+# =============================================================================
+# Role: sonarqube — Code quality and security analysis platform
+# Integrates with Woodpecker CI via sonar-scanner in pipeline steps
+# =============================================================================
+
+- name: Add SonarQube Helm repository
+  kubernetes.core.helm_repository:
+    name: sonarqube
+    repo_url: https://SonarSource.github.io/helm-chart-sonarqube
+
+
+- name: Create sonarqube database user in PostgreSQL
+  ansible.builtin.shell: |
+    kubectl exec -n databases postgresql-0 -c postgresql -- bash -lc '
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 <<SQL
+    DO \$\$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT FROM pg_catalog.pg_roles WHERE rolname = '\''sonarqube'\''
+      ) THEN
+        CREATE USER sonarqube WITH ENCRYPTED PASSWORD '\''{{ sonarqube_admin_password }}'\'';
+      END IF;
+    END
+    \$\$;
+    SQL
+    '
+  changed_when: false
+
+- name: Create sonarqube database in PostgreSQL
+  ansible.builtin.shell: |
+    kubectl exec -n databases postgresql-0 -c postgresql -- bash -lc '
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\''sonarqube'\''" | grep -q 1 ||
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE sonarqube OWNER sonarqube;"
+    '
+  changed_when: false
+
+
+- name: Install SonarQube via Helm
+  kubernetes.core.helm:
+    name: sonarqube
+    chart_ref: sonarqube/sonarqube
+    chart_version: "{{ sonarqube_version }}"
+    release_namespace: "{{ sonarqube_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "15m"
+    values:
+      deploymentType: Deployment
+      replicaCount: 1
+      image:
+        tag: community
+      community:
+        enabled: true
+      service:
+        type: ClusterIP
+      ingress:
+        enabled: true
+        ingressClassName: nginx
+        annotations:
+          cert-manager.io/cluster-issuer: selfsigned-issuer
+          nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+        hosts:
+          - name: "{{ sonarqube_hostname }}"
+            path: /
+            pathType: Prefix
+        tls:
+          - secretName: sonarqube-tls
+            hosts:
+              - "{{ sonarqube_hostname }}"
+      resources:
+        requests:
+          memory: 2Gi
+          cpu: 500m
+        limits:
+          memory: 4Gi
+          cpu: 2000m
+      persistence:
+        enabled: true
+        storageClass: "{{ sonarqube_storage_class }}"
+        size: "{{ sonarqube_storage_size }}"
+      
+      jdbcOverwrite:
+       enable: true
+       jdbcUrl: "jdbc:postgresql://postgresql.databases.svc.cluster.local:5432/sonarqube"
+       jdbcUsername: "sonarqube"
+       jdbcPassword: "{{ sonarqube_admin_password }}"
+      # JVM settings
+      jvmOpts: "-Xmx1g -Xms512m"
+      jvmCeOpts: "-Xmx512m -Xms256m"
+      # Plugins
+      plugins:
+        install: []
+      # Prometheus metrics via JMX exporter
+      prometheusExporter:
+        enabled: true
+        config:
+          rules:
+            - pattern: ".*"
+      monitoringPasscode: "{{ sonarqube_admin_password }}"
+      sonarProperties:
+        sonar.forceAuthentication: "true"
+
+- name: Wait for SonarQube to be ready (takes 3-5 min)
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ sonarqube_namespace }} -l app=sonarqube
+    --no-headers | grep Running | wc -l
+  register: sonar_pods
+  until: sonar_pods.stdout | int >= 1
+  retries: 40
+  delay: 15
+  changed_when: false
+
+- name: Display SonarQube access info
+  ansible.builtin.debug:
+    msg:
+      - "SonarQube: https://{{ sonarqube_hostname }}"
+      - "Admin:     admin / admin (change on first login)"
+      - ""
+      - "WOODPECKER CI INTEGRATION:"
+      - "Add this step to your .woodpecker.yml:"
+      - "  - name: sonar-scan"
+      - "    image: sonarsource/sonar-scanner-cli:latest"
+      - "    environment:"
+      - "      SONAR_HOST_URL: https://{{ sonarqube_hostname }}"
+      - "      SONAR_TOKEN:"
+      - "        from_secret: sonar_token"
+      - "    commands:"
+      - "      - sonar-scanner -Dsonar.projectKey=my-app"

@@ -1,0 +1,40 @@
+---
+# ArgoCD AppProject — production namespace for SRIIT apps
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: sriit-production
+  namespace: {{ argocd_namespace }}
+spec:
+  description: Production applications for SRIIT Services
+  sourceRepos:
+    - "https://{{ gitea_hostname }}/*"
+    - "https://charts.helm.sh/stable"
+    - "https://charts.bitnami.com/bitnami"
+  destinations:
+    - namespace: default
+      server: https://kubernetes.default.svc
+    - namespace: production
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: sriit-staging
+  namespace: {{ argocd_namespace }}
+spec:
+  description: Staging applications for SRIIT Services
+  sourceRepos:
+    - "https://{{ gitea_hostname }}/*"
+  destinations:
+    - namespace: staging
+      server: https://kubernetes.default.svc
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

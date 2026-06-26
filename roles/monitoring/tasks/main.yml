@@ -1,0 +1,228 @@
+---
+# =============================================================================
+# Role: monitoring — Deploy kube-prometheus-stack (Prometheus + Grafana + Alertmanager)
+# Full cluster observability: metrics, dashboards, and alerts
+# =============================================================================
+
+- name: Create monitoring namespace
+  ansible.builtin.command: kubectl create namespace {{ monitoring_namespace }}
+  ignore_errors: true
+  changed_when: true
+
+- name: Install kube-prometheus-stack via Helm
+  kubernetes.core.helm:
+    name: kube-prometheus-stack
+    chart_ref: prometheus/kube-prometheus-stack
+    chart_version: "{{ kube_prometheus_stack_version }}"
+    release_namespace: "{{ monitoring_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "15m"
+    values:
+      # ── Global ──────────────────────────────────────────────────────────
+      global:
+        rbac:
+          create: true
+          pspEnabled: false
+
+      # ── Prometheus ──────────────────────────────────────────────────────
+      prometheus:
+        prometheusSpec:
+          retention: 30d
+          retentionSize: "18GB"
+          scrapeInterval: "30s"
+          evaluationInterval: "30s"
+          serviceMonitorSelectorNilUsesHelmValues: false
+          podMonitorSelectorNilUsesHelmValues: false
+          ruleSelectorNilUsesHelmValues: false
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          storageSpec:
+            volumeClaimTemplate:
+              spec:
+                storageClassName: "{{ prometheus_storage_class }}"
+                accessModes: [ReadWriteOnce]
+                resources:
+                  requests:
+                    storage: "{{ prometheus_storage_size }}"
+          additionalScrapeConfigs:
+            - job_name: 'kubernetes-ingress'
+              static_configs:
+                - targets: ['ingress-nginx-controller-metrics.ingress-nginx:10254']
+        ingress:
+          enabled: true
+          ingressClassName: nginx
+          hosts:
+            - prometheus.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-issuer
+          tls:
+            - secretName: prometheus-tls
+              hosts:
+                - prometheus.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
+
+      # ── Grafana ─────────────────────────────────────────────────────────
+      grafana:
+        adminPassword: "{{ grafana_admin_password }}"
+        persistence:
+          enabled: true
+          storageClassName: "{{ prometheus_storage_class }}"
+          size: "{{ grafana_storage_size }}"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        dashboardProviders:
+          dashboardproviders.yaml:
+            apiVersion: 1
+            providers:
+              - name: default
+                orgId: 1
+                folder: ''
+                type: file
+                disableDeletion: false
+                editable: true
+                options:
+                  path: /var/lib/grafana/dashboards/default
+        dashboards:
+          default:
+            kubernetes-cluster-overview:
+              gnetId: 7249
+              revision: 1
+              datasource: Prometheus
+            node-exporter:
+              gnetId: 1860
+              revision: 37
+              datasource: Prometheus
+            nginx-ingress:
+              gnetId: 9614
+              revision: 1
+              datasource: Prometheus
+            longhorn:
+              gnetId: 16888
+              revision: 9
+              datasource: Prometheus
+            postgresql:
+              gnetId: 9628
+              revision: 7
+              datasource: Prometheus
+            redis:
+              gnetId: 11835
+              revision: 1
+              datasource: Prometheus
+        ingress:
+          enabled: true
+          ingressClassName: nginx
+          hosts:
+            - grafana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-issuer
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          tls:
+            - secretName: grafana-tls
+              hosts:
+                - grafana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
+        grafana.ini:
+          server:
+            root_url: "https://grafana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+          auth.anonymous:
+            enabled: false
+          security:
+            allow_embedding: true
+          unified_alerting:
+            enabled: true
+
+      # ── Alertmanager ────────────────────────────────────────────────────
+      alertmanager:
+        alertmanagerSpec:
+          storage:
+            volumeClaimTemplate:
+              spec:
+                storageClassName: "{{ prometheus_storage_class }}"
+                accessModes: [ReadWriteOnce]
+                resources:
+                  requests:
+                    storage: "{{ alertmanager_storage_size }}"
+        ingress:
+          enabled: true
+          ingressClassName: nginx
+          hosts:
+            - alertmanager.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-issuer
+          tls:
+            - secretName: alertmanager-tls
+              hosts:
+                - alertmanager.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
+        config:
+          global:
+            resolve_timeout: 5m
+          route:
+            group_by: [alertname, cluster, service]
+            group_wait: 10s
+            group_interval: 10m
+            repeat_interval: 12h
+            receiver: default
+          receivers:
+            - name: default
+              # Add email/slack/pagerduty config here
+
+      # ── Node Exporter ───────────────────────────────────────────────────
+      nodeExporter:
+        enabled: true
+        tolerations:
+          - key: node-role.kubernetes.io/control-plane
+            effect: NoSchedule
+            operator: Exists
+
+      # ── kube-state-metrics ──────────────────────────────────────────────
+      kubeStateMetrics:
+        enabled: true
+
+      # ── Default PrometheusRules ─────────────────────────────────────────
+      defaultRules:
+        create: true
+        rules:
+          alertmanager: true
+          etcd: true
+          kubeApiserverAvailability: true
+          kubelet: true
+          kubeProxy: true
+          kubeScheduler: true
+          node: true
+          general: true
+
+- name: Wait for monitoring pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ monitoring_namespace }} --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: monitoring_pods
+  until: monitoring_pods.stdout | int == 0
+  retries: 40
+  delay: 15
+  changed_when: false
+
+- name: Apply custom PrometheusRules (production alerts)
+  ansible.builtin.template:
+    src: prometheus-rules.yaml.j2
+    dest: /tmp/prometheus-rules.yaml
+    mode: "0644"
+
+- name: Deploy custom alert rules
+  ansible.builtin.command: kubectl apply -f /tmp/prometheus-rules.yaml
+  changed_when: true
+
+- name: Display monitoring access info
+  ansible.builtin.debug:
+    msg:
+      - "Grafana:       https://grafana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }} (admin / {{ grafana_admin_password }})"
+      - "Prometheus:    https://prometheus.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      - "Alertmanager:  https://alertmanager.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"

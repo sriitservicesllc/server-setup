@@ -1,0 +1,46 @@
+---
+# =============================================================================
+# Role: metallb — Deploy MetalLB for bare-metal LoadBalancer services
+# =============================================================================
+
+- name: Check if MetalLB is already installed
+  ansible.builtin.command: kubectl get namespace metallb-system
+  register: metallb_ns
+  ignore_errors: true
+  changed_when: false
+
+- name: Install MetalLB via Helm
+  kubernetes.core.helm:
+    name: metallb
+    chart_ref: metallb/metallb
+    chart_version: "{{ metallb_version }}"
+    release_namespace: metallb-system
+    create_namespace: true
+    values:
+      speaker:
+        tolerations:
+          - key: node-role.kubernetes.io/control-plane
+            effect: NoSchedule
+  when: metallb_ns.rc != 0
+
+- name: Wait for MetalLB pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n metallb-system --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: metallb_pods
+  until: metallb_pods.stdout | int == 0
+  retries: 80
+  delay: 10
+  changed_when: false
+
+- name: Create MetalLB IPAddressPool
+  ansible.builtin.template:
+    src: metallb-config.yaml.j2
+    dest: /tmp/metallb-config.yaml
+    mode: "0644"
+
+- name: Apply MetalLB IPAddressPool and L2Advertisement
+  ansible.builtin.command: kubectl apply -f /tmp/metallb-config.yaml
+  changed_when: true
+  retries: 5
+  delay: 10

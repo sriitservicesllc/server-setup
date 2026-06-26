@@ -1,0 +1,85 @@
+---
+# Custom PrometheusRules for production alerting
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: production-alerts
+  namespace: {{ monitoring_namespace }}
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: node.rules
+      rules:
+        - alert: NodeHighCPU
+          expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High CPU usage on {{ "{{" }} $labels.instance {{ "}}" }}"
+            description: "CPU usage is above 85% for 10 minutes."
+
+        - alert: NodeHighMemory
+          expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High memory usage on {{ "{{" }} $labels.instance {{ "}}" }}"
+            description: "Memory usage is above 85%."
+
+        - alert: NodeDiskSpaceLow
+          expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 15
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Disk space critically low on {{ "{{" }} $labels.instance {{ "}}" }}"
+            description: "Less than 15% disk space remaining on /."
+
+    - name: kubernetes.rules
+      rules:
+        - alert: PodCrashLooping
+          expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 5 > 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ "{{" }} $labels.pod {{ "}}" }} is crash looping"
+            description: "Pod restarted more than 5 times in 15 minutes."
+
+        - alert: PersistentVolumeClaimPending
+          expr: kube_persistentvolumeclaim_status_phase{phase="Pending"} == 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PVC {{ "{{" }} $labels.persistentvolumeclaim {{ "}}" }} is Pending"
+            description: "PVC has been in Pending state for more than 10 minutes."
+
+        - alert: DeploymentReplicasMismatch
+          expr: kube_deployment_spec_replicas != kube_deployment_status_available_replicas
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Deployment {{ "{{" }} $labels.deployment {{ "}}" }} has replica mismatch"
+
+    - name: database.rules
+      rules:
+        - alert: PostgreSQLDown
+          expr: pg_up == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PostgreSQL is down on {{ "{{" }} $labels.instance {{ "}}" }}"
+
+        - alert: RedisDown
+          expr: redis_up == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Redis is down on {{ "{{" }} $labels.instance {{ "}}" }}"

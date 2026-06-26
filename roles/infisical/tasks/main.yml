@@ -1,0 +1,98 @@
+---
+- name: Add Infisical Helm repository
+  kubernetes.core.helm_repository:
+    name: infisical
+    repo_url: https://dl.cloudsmith.io/public/infisical/helm-charts/helm/charts/
+
+- name: Create Infisical namespace
+  ansible.builtin.command: >
+    kubectl create namespace {{ infisical_namespace | default('infisical') }}
+  register: infisical_ns
+  failed_when: infisical_ns.rc != 0 and 'AlreadyExists' not in infisical_ns.stderr
+  changed_when: "'created' in infisical_ns.stdout"
+
+- name: Create Infisical database user in PostgreSQL
+  ansible.builtin.shell: |
+    kubectl exec -n databases postgresql-0 -c postgresql -- bash -lc '
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 <<SQL
+    DO \$\$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT FROM pg_catalog.pg_roles WHERE rolname = '\''infisical'\''
+      ) THEN
+        CREATE USER infisical WITH ENCRYPTED PASSWORD '\''{{ infisical_db_password }}'\'';
+      END IF;
+    END
+    \$\$;
+    SQL
+    '
+  changed_when: false
+
+- name: Create Infisical database in PostgreSQL
+  ansible.builtin.shell: |
+    kubectl exec -n databases postgresql-0 -c postgresql -- bash -lc '
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\''infisical'\''" | grep -q 1 ||
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE infisical OWNER infisical;"
+    '
+  changed_when: false
+
+- name: Create Infisical secrets
+  ansible.builtin.shell: |
+    kubectl create secret generic infisical-secrets \
+      --namespace {{ infisical_namespace | default('infisical') }} \
+      --from-literal=AUTH_SECRET="{{ infisical_auth_secret }}" \
+      --from-literal=ENCRYPTION_KEY="{{ infisical_encryption_key }}" \
+      --from-literal=DB_CONNECTION_URI="postgresql://infisical:{{ infisical_db_password }}@postgresql.databases.svc.cluster.local:5432/infisical" \
+      --from-literal=REDIS_URL="redis://redis-headless.databases.svc.cluster.local:6379" \
+      --from-literal=SITE_URL="https://{{ infisical_hostname }}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  changed_when: false
+  no_log: true
+
+- name: Create Infisical values file
+  ansible.builtin.copy:
+    dest: /tmp/infisical-values.yaml
+    mode: "0600"
+    content: |
+      infisical:
+        image:
+          repository: infisical/infisical
+          tag: "{{ infisical_image_tag | default('v0.161.8') }}"
+          pullPolicy: IfNotPresent
+        replicaCount: 1
+
+      postgresql:
+        enabled: false
+
+      redis:
+        enabled: false
+
+      ingress:
+        enabled: true
+        hostName: "{{ infisical_hostname }}"
+        ingressClassName: nginx
+        annotations:
+          cert-manager.io/cluster-issuer: selfsigned-issuer
+          nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+        nginx:
+          enabled: false
+        tls:
+          - secretName: infisical-tls
+            hosts:
+              - "{{ infisical_hostname }}"
+
+- name: Install Infisical via Helm
+  ansible.builtin.command: >
+    helm upgrade --install infisical infisical/infisical-standalone
+    --namespace {{ infisical_namespace | default('infisical') }}
+    --values /tmp/infisical-values.yaml
+    --wait
+    --timeout 15m
+  changed_when: true
+
+- name: Display Infisical access info
+  ansible.builtin.debug:
+    msg:
+      - "Infisical deployed"
+      - "URL: https://{{ infisical_hostname }}"

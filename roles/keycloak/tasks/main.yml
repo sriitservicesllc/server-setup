@@ -1,0 +1,101 @@
+---
+# =============================================================================
+# Role: keycloak — Single Sign-On Identity Provider
+# Provides centralized authentication for Gitea, ArgoCD, Grafana, Harbor,
+# Wiki.js and Mattermost via OpenID Connect (OIDC)
+# =============================================================================
+
+- name: Create auth namespace
+  ansible.builtin.command: kubectl create namespace {{ keycloak_namespace }}
+  ignore_errors: true
+  changed_when: true
+
+- name: Install Keycloak via Helm (Bitnami)
+  kubernetes.core.helm:
+    name: keycloak
+    chart_ref: bitnami/keycloak
+    chart_version: "{{ keycloak_version }}"
+    release_namespace: "{{ keycloak_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "15m"
+    values:
+      auth:
+        adminUser: "{{ keycloak_admin_user }}"
+        adminPassword: "{{ keycloak_admin_password }}"
+      production: true
+      proxy: edge
+      replicaCount: 1
+      extraEnvVars:
+        - name: KEYCLOAK_EXTRA_ARGS
+          value: "--import-realm"
+      resources:
+        requests:
+          memory: 512Mi
+          cpu: 250m
+        limits:
+          memory: 2Gi
+          cpu: 1000m
+      ingress:
+        enabled: true
+        ingressClassName: nginx
+        hostname: "{{ keycloak_hostname }}"
+        annotations:
+          cert-manager.io/cluster-issuer: selfsigned-issuer
+          nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+        tls: true
+      postgresql:
+        enabled: true
+        auth:
+          username: keycloak
+          password: "{{ keycloak_admin_password }}"
+          database: keycloak
+        primary:
+          persistence:
+            storageClass: "{{ keycloak_storage_class }}"
+            size: "{{ keycloak_storage_size }}"
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+          namespace: monitoring
+
+- name: Wait for Keycloak pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ keycloak_namespace }} --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: keycloak_pods
+  until: keycloak_pods.stdout | int == 0
+  retries: 50
+  delay: 15
+  changed_when: false
+
+- name: Import SRIIT realm configuration
+  ansible.builtin.template:
+    src: keycloak-realm.json.j2
+    dest: /tmp/keycloak-realm.json
+    mode: "0644"
+
+- name: Create ConfigMap with realm JSON
+  ansible.builtin.shell: >
+    kubectl create configmap keycloak-realm
+    --from-file=realm.json=/tmp/keycloak-realm.json
+    -n {{ keycloak_namespace }}
+    --dry-run=client -o yaml | kubectl apply -f -
+  changed_when: true
+
+- name: Display Keycloak access info
+  ansible.builtin.debug:
+    msg:
+      - "Keycloak SSO:  https://{{ keycloak_hostname }}"
+      - "Realm:         {{ keycloak_realm }}"
+      - "Admin User:    {{ keycloak_admin_user }}"
+      - "Admin Pass:    {{ keycloak_admin_password }}"
+      - ""
+      - "CLIENTS TO CREATE in realm '{{ keycloak_realm }}':"
+      - "  - gitea     (redirect: https://{{ gitea_hostname }}/user/oauth2/keycloak/callback)"
+      - "  - argocd    (redirect: https://{{ argocd_hostname }}/auth/callback)"
+      - "  - grafana   (redirect: https://grafana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}/login/generic_oauth)"
+      - "  - mattermost(redirect: https://{{ mattermost_hostname }}/signup/gitlab/complete)"
+      - "  - wiki      (redirect: https://{{ wiki_js_hostname }}/login/keycloak/callback)"

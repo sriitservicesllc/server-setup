@@ -1,0 +1,231 @@
+---
+# =============================================================================
+# MAIN SITE PLAYBOOK — Full Kubernetes Cluster Deployment
+# =============================================================================
+# Run:             ansible-playbook -i inventory/hosts.yml site.yml
+# Selective tags:  ansible-playbook -i inventory/hosts.yml site.yml --tags monitoring
+# Dry run:         ansible-playbook -i inventory/hosts.yml site.yml --check
+# =============================================================================
+
+- name: "01 · Preflight Checks"
+  hosts: k8s_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - role: preflight
+      tags: [preflight, always]
+
+- name: "02 · Common Node Preparation"
+  hosts: k8s_cluster
+  become: true
+  roles:
+    - role: common
+      tags: [common, bootstrap]
+
+- name: "03 · Container Runtime (containerd)"
+  hosts: k8s_cluster
+  become: true
+  roles:
+    - role: containerd
+      tags: [containerd, bootstrap]
+
+- name: "04 · Kubernetes Binaries (kubeadm / kubelet / kubectl + Helm)"
+  hosts: k8s_cluster
+  become: true
+  roles:
+    - role: kubernetes_binaries
+      tags: [k8s_binaries, bootstrap]
+
+- name: "05 · Initialize Control Plane"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: control_plane
+      tags: [control_plane, master]
+
+- name: "06 · CNI Network Plugin (Calico / Flannel)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: cni
+      tags: [cni, network]
+
+- name: "07 · Join Worker Nodes"
+  hosts: k8s_workers
+  become: true
+  roles:
+    - role: worker_join
+      tags: [workers, join]
+
+- name: "08 · Node Labels & Taints"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: node_config
+      tags: [node_config]
+
+- name: "09 · MetalLB (Bare-Metal Load Balancer)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: metallb
+      tags: [metallb, networking]
+      when: metallb_enabled | bool
+
+- name: "10 · NGINX Ingress Controller"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: ingress_nginx
+      tags: [ingress, networking]
+      when: ingress_nginx_enabled | bool
+
+- name: "11 · cert-manager (TLS Automation)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: cert_manager
+      tags: [cert_manager, tls]
+      when: cert_manager_enabled | bool
+
+- name: "12 · Longhorn Distributed Storage"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: storage_longhorn
+      tags: [storage, longhorn]
+      when: storage_enabled | bool
+
+- name: "13 · Logging Stack (EFK — Elasticsearch + Fluent Bit + Kibana)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: logging
+      tags: [logging, efk]
+      when: logging_enabled | bool
+
+- name: "14 · Monitoring Stack (Prometheus + Grafana + Alertmanager)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: monitoring
+      tags: [monitoring, prometheus, grafana]
+      when: monitoring_enabled | bool
+
+- name: "15 · MinIO Object Storage (Velero Backup Target)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: minio
+      tags: [minio, storage, backup]
+      when: minio_enabled | bool
+
+- name: "16 · Databases (PostgreSQL / MySQL / Redis)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: databases
+      tags: [databases, db]
+
+- name: "17 · Kong API Gateway"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: kong
+      tags: [kong, api, gateway, networking]
+      when: kong_enabled | bool
+
+- name: "18 · Harbor Container Registry"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: harbor_registry
+      tags: [harbor, registry]
+      when: harbor_enabled | bool
+
+- name: "19 · Trivy Vulnerability Scanner"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: trivy_scanner
+      tags: [trivy, security]
+      when: trivy_operator_enabled | bool
+
+- name: "20 · Gitea (Self-Hosted Git — Email Auth)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: gitea
+      tags: [gitea, scm, devops]
+      when: gitea_enabled | bool
+
+- name: "21 · Woodpecker CI (Continuous Integration)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: woodpecker_ci
+      tags: [woodpecker, ci, devops]
+      when: woodpecker_enabled | bool
+
+- name: "22 · ArgoCD (GitOps Continuous Delivery)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: argocd
+      tags: [argocd, cd, gitops, devops]
+      when: argocd_enabled | bool
+
+- name: "23 · SonarQube (Code Quality)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: sonarqube
+      tags: [sonarqube, quality, devops]
+      when: sonarqube_enabled | bool
+
+#- name: "24 · HashiCorp Vault (Secrets Management)"
+#  hosts: k8s_masters
+#  become: true
+#  roles:
+#    - role: vault_hashicorp
+#      tags: [vault, secrets, security]
+#      when: vault_enabled | bool
+      
+- name: "24 infisical (Secrets Management)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: infisical
+      tags: [vault, secrets, security]
+      when: infisical_enabled | bool
+
+- name: "25 · Wiki.js (Team Documentation)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: wiki_js
+      tags: [wiki, docs, collaboration]
+      when: wiki_js_enabled | bool
+
+- name: "26 · Mattermost (Team Communication)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: mattermost
+      tags: [mattermost, chat, collaboration]
+      when: mattermost_enabled | bool
+
+- name: "27 · Velero Backup (MinIO → OneDrive via rclone)"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: velero
+      tags: [velero, backup]
+      when: velero_enabled | bool
+
+- name: "28 · Post-Install Validation"
+  hosts: k8s_masters
+  become: true
+  roles:
+    - role: validate
+      tags: [validate, always]

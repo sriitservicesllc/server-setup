@@ -1,0 +1,63 @@
+---
+# =============================================================================
+# Role: node_config — Apply labels, taints, and annotations to nodes
+# =============================================================================
+
+- name: Get pending CSRs
+  ansible.builtin.shell: "kubectl get csr | grep -i pending | awk '{print $1}'"
+  register: pending_csrs
+  failed_when: false
+  changed_when: false
+
+- name: Approve pending CSRs
+  ansible.builtin.command: "kubectl certificate approve {{ item }}"
+  loop: "{{ pending_csrs.stdout_lines }}"
+  when: pending_csrs.stdout_lines | length > 0
+  changed_when: true
+
+- name: Label master node
+  ansible.builtin.command: >
+    kubectl label node {{ item }}
+    node-role.kubernetes.io/master=""
+    environment=production
+    --overwrite
+  loop: "{{ groups['k8s_masters'] }}"
+  changed_when: true
+
+- name: Label worker nodes with their custom labels
+  ansible.builtin.command: >
+    kubectl label node {{ item }}
+    {% for key, value in hostvars[item].node_labels.items() %}
+    {{ key }}={{ value }}
+    {% endfor %}
+    environment=production
+    --overwrite
+  loop: "{{ groups['k8s_workers'] }}"
+  when: hostvars[item].node_labels is defined
+  changed_when: true
+
+- name: Taint master node (no scheduling of regular workloads)
+  ansible.builtin.command: >
+    kubectl taint nodes {{ item }}
+    node-role.kubernetes.io/control-plane=:NoSchedule
+    --overwrite
+  loop: "{{ groups['k8s_masters'] }}"
+  changed_when: true
+
+- name: Enable master scheduling for single-node test clusters
+  ansible.builtin.command: >
+    kubectl taint nodes {{ item }}
+    node-role.kubernetes.io/control-plane:NoSchedule-
+  loop: "{{ groups['k8s_masters'] }}"
+  when: groups['k8s_workers'] | length == 0
+  ignore_errors: true
+  changed_when: true
+
+- name: Display final node status
+  ansible.builtin.command: kubectl get nodes -o wide
+  register: nodes_output
+  changed_when: false
+
+- name: Print node status
+  ansible.builtin.debug:
+    msg: "{{ nodes_output.stdout_lines }}"

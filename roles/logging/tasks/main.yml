@@ -1,0 +1,166 @@
+---
+# =============================================================================
+# Role: logging — Deploy EFK Stack (Elasticsearch + Fluent Bit + Kibana)
+# Centralizes all container logs from across the cluster
+# =============================================================================
+
+- name: Create logging namespace
+  ansible.builtin.command: kubectl create namespace {{ logging_namespace }}
+  ignore_errors: true
+  changed_when: true
+
+# ── ECK Operator ─────────────────────────────────────────────────────────────
+- name: Add ECK Operator CRDs
+  ansible.builtin.command: >
+    kubectl apply -f
+    https://download.elastic.co/downloads/eck/{{ eck_operator_version }}/crds.yaml
+  changed_when: true
+
+- name: Deploy ECK Operator
+  ansible.builtin.command: >
+    kubectl apply -f
+    https://download.elastic.co/downloads/eck/{{ eck_operator_version }}/operator.yaml
+  changed_when: true
+
+- name: Wait for ECK operator to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n elastic-system --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: eck_pods
+  until: eck_pods.stdout | int == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+# ── Elasticsearch ─────────────────────────────────────────────────────────────
+- name: Deploy Elasticsearch cluster
+  ansible.builtin.template:
+    src: elasticsearch.yaml.j2
+    dest: /tmp/elasticsearch.yaml
+    mode: "0644"
+
+- name: Apply Elasticsearch manifest
+  ansible.builtin.command: kubectl apply -f /tmp/elasticsearch.yaml
+  changed_when: true
+
+- name: Wait for Elasticsearch to be ready
+  ansible.builtin.shell: >
+    kubectl get elasticsearch -n {{ logging_namespace }} cluster-logs
+    -o jsonpath='{.status.health}'
+  register: es_health
+  until: es_health.stdout == "green" or es_health.stdout == "yellow"
+  retries: 40
+  delay: 15
+  changed_when: false
+
+# ── Kibana ─────────────────────────────────────────────────────────────────
+- name: Deploy Kibana
+  ansible.builtin.template:
+    src: kibana.yaml.j2
+    dest: /tmp/kibana.yaml
+    mode: "0644"
+
+- name: Apply Kibana manifest
+  ansible.builtin.command: kubectl apply -f /tmp/kibana.yaml
+  changed_when: true
+
+- name: Wait for Kibana to be ready
+  ansible.builtin.shell: >
+    kubectl get kibana -n {{ logging_namespace }} kibana
+    -o jsonpath='{.status.health}'
+  register: kibana_health
+  until: kibana_health.stdout == "green" or kibana_health.stdout == "yellow"
+  retries: 40
+  delay: 15
+  changed_when: false
+
+# ── Fluent Bit (log shipper) ─────────────────────────────────────────────────
+- name: Add Fluent Helm repo
+  kubernetes.core.helm_repository:
+    name: fluent
+    repo_url: https://fluent.github.io/helm-charts
+    
+- name: Update Helm repos
+  ansible.builtin.command: helm repo update
+  changed_when: false
+
+- name: Install Fluent Bit DaemonSet via Helm
+  kubernetes.core.helm:
+    name: fluent-bit
+    chart_ref: fluent/fluent-bit
+    release_namespace: "{{ logging_namespace }}"
+    create_namespace: false
+    wait: true
+    values:
+      daemonset:
+        enabled: true
+      config:
+        service: |
+          [SERVICE]
+              Flush        5
+              Daemon       Off
+              Log_Level    info
+              Parsers_File parsers.conf
+              HTTP_Server  On
+              HTTP_Listen  0.0.0.0
+              HTTP_Port    2020
+        inputs: |
+          [INPUT]
+              Name             tail
+              Path             /var/log/containers/*.log
+              Parser           docker
+              Tag              kube.*
+              Refresh_Interval 5
+              Mem_Buf_Limit    5MB
+              Skip_Long_Lines  On
+        filters: |
+          [FILTER]
+              Name                kubernetes
+              Match               kube.*
+              Kube_URL            https://kubernetes.default.svc:443
+              Kube_CA_File        /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              Kube_Token_File     /var/run/secrets/kubernetes.io/serviceaccount/token
+              Kube_Tag_Prefix     kube.var.log.containers.
+              Merge_Log           On
+              Keep_Log            Off
+              K8S-Logging.Parser  On
+              K8S-Logging.Exclude Off
+          [FILTER]
+              Name  record_modifier
+              Match kube.*
+              Record cluster_name {{ cluster_name }}
+        outputs: |
+          [OUTPUT]
+              Name  es
+              Match kube.*
+              Host  cluster-logs-es-http.{{ logging_namespace }}.svc.cluster.local
+              Port  9200
+              Index fluent-bit
+              HTTP_User elastic
+              HTTP_Passwd ${ELASTICSEARCH_PASSWORD}
+              tls On
+              tls.verify Off
+              Suppress_Type_Name On
+      serviceMonitor:
+        enabled: true
+        namespace: monitoring
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+          operator: Exists
+
+- name: Wait for Fluent Bit pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ logging_namespace }} -l app.kubernetes.io/name=fluent-bit
+    --no-headers | grep -v Running | wc -l
+  register: fb_pods
+  until: fb_pods.stdout | int == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Display logging stack access info
+  ansible.builtin.debug:
+    msg:
+      - "Kibana Ingress: https://kibana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      - "Elasticsearch internal: https://cluster-logs-es-http.{{ logging_namespace }}.svc.cluster.local:9200"

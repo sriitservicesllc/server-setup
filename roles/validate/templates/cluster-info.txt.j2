@@ -1,0 +1,39 @@
+============================================================
+  KUBERNETES CLUSTER: {{ cluster_name | upper }}
+  Generated: {{ ansible_date_time.iso8601 }}
+============================================================
+
+NODES:
+{% for host in groups['k8s_masters'] %}
+  MASTER  {{ host }}  ({{ hostvars[host].ansible_host }})
+{% endfor %}
+{% for host in groups['k8s_workers'] %}
+  WORKER  {{ host }}  ({{ hostvars[host].ansible_host }})
+{% endfor %}
+
+INGRESS CONTROLLER:
+  External IP: {{ ingress_ip.stdout | default('Pending...') }}
+  Point *.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }} → {{ ingress_ip.stdout | default('INGRESS_IP') }}
+
+ACCESS URLS:
+  Harbor Registry:   https://{{ harbor_hostname }}
+  Grafana:           https://grafana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
+  Kibana:            https://kibana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
+  Prometheus:        https://prometheus.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
+  Alertmanager:      https://alertmanager.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
+  Longhorn:          https://longhorn.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
+
+DATABASE ENDPOINTS (cluster-internal):
+  PostgreSQL:  postgresql.{{ postgresql_namespace }}.svc.cluster.local:5432
+  MySQL:       mysql.{{ mysql_namespace }}.svc.cluster.local:3306
+  Redis:       redis-master.{{ redis_namespace }}.svc.cluster.local:6379
+
+KUBECONFIG:
+  File: kubeconfig/admin.conf
+  Use:  export KUBECONFIG=<path>/kubeconfig/admin.conf
+
+STORAGE CLASSES:
+  longhorn        (default) — replicated distributed storage
+  longhorn-fast   — SSD-targeted (label nodes with disk=ssd)
+  longhorn-backup — single-replica for log/backup data
+============================================================

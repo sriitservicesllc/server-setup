@@ -1,0 +1,43 @@
+---
+# =============================================================================
+# Role: worker_join — Join worker nodes to the Kubernetes cluster
+# =============================================================================
+
+- name: Check if node is already joined
+  ansible.builtin.stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf
+
+- name: Fetch join command from master node
+  ansible.builtin.slurp:
+    src: /tmp/k8s_worker_join_command.sh
+  register: join_cmd_encoded
+  delegate_to: "{{ groups['k8s_masters'][0] }}"
+  when: not kubelet_conf.stat.exists
+
+- name: Decode join command
+  ansible.builtin.set_fact:
+    worker_join_cmd: "{{ join_cmd_encoded.content | b64decode | trim }}"
+  when: not kubelet_conf.stat.exists
+
+- name: Join worker node to cluster
+  ansible.builtin.command: "{{ worker_join_cmd }}"
+  register: join_result
+  when: not kubelet_conf.stat.exists
+  changed_when: true
+
+- name: Display join result
+  ansible.builtin.debug:
+    msg: "{{ join_result.stdout_lines }}"
+  when: not kubelet_conf.stat.exists
+
+- name: Wait for node to appear in cluster
+  command: kubectl get node {{ inventory_hostname }} --no-headers
+  register: node_status
+  until: '"Ready" in node_status.stdout'
+  retries: 30
+  delay: 10
+  delegate_to: localhost
+  connection: local
+  become: false
+  check_mode: false

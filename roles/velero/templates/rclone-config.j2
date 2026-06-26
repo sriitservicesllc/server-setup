@@ -1,0 +1,18 @@
+# rclone configuration for OneDrive backup sync
+# Source: MinIO (S3-compatible in-cluster storage)
+# Destination: Microsoft OneDrive
+
+[minio]
+type = s3
+provider = Minio
+access_key_id = {{ minio_root_user }}
+secret_access_key = {{ minio_root_password }}
+endpoint = {{ velero_s3_endpoint }}
+force_path_style = true
+
+[onedrive]
+type = onedrive
+token = {{ velero_onedrive_token }}
+client_id = {{ velero_onedrive_client_id }}
+client_secret = {{ velero_onedrive_client_secret }}
+drive_type = personal

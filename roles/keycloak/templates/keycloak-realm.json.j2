@@ -1,0 +1,67 @@
+{
+  "realm": "{{ keycloak_realm }}",
+  "enabled": true,
+  "displayName": "SRIIT Services",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "sslRequired": "external",
+  "defaultSignatureAlgorithm": "RS256",
+  "clients": [
+    {
+      "clientId": "argocd",
+      "name": "ArgoCD",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "redirectUris": ["https://{{ argocd_hostname }}/auth/callback"],
+      "webOrigins": ["https://{{ argocd_hostname }}"],
+      "attributes": {
+        "access.token.lifespan": "3600"
+      }
+    },
+    {
+      "clientId": "grafana",
+      "name": "Grafana",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "redirectUris": ["https://grafana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}/login/generic_oauth"]
+    },
+    {
+      "clientId": "gitea",
+      "name": "Gitea",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "redirectUris": ["https://{{ gitea_hostname }}/user/oauth2/keycloak/callback"]
+    },
+    {
+      "clientId": "wiki",
+      "name": "Wiki.js",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "redirectUris": ["https://{{ wiki_js_hostname }}/login/keycloak/callback"]
+    }
+  ],
+  "groups": [
+    { "name": "admin" },
+    { "name": "developers" },
+    { "name": "devops" },
+    { "name": "qa" }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "admin" },
+      { "name": "developer" },
+      { "name": "viewer" }
+    ]
+  }
+}

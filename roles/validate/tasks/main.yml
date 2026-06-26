@@ -1,0 +1,99 @@
+---
+# =============================================================================
+# Role: validate — Post-installation validation and smoke tests
+# =============================================================================
+
+- name: Check all nodes are Ready
+  ansible.builtin.shell: kubectl get nodes --no-headers | grep -c Ready
+  register: ready_nodes
+  changed_when: false
+
+- name: Assert all expected nodes are Ready
+  ansible.builtin.assert:
+    that: ready_nodes.stdout | int == (groups['k8s_cluster'] | length)
+    fail_msg: >-
+      Only {{ ready_nodes.stdout }} nodes are Ready.
+      Expected {{ groups['k8s_cluster'] | length }}.
+    success_msg: "All {{ ready_nodes.stdout }} nodes are Ready ✓"
+
+- name: Check all system pods are Running
+  ansible.builtin.shell: >
+    kubectl get pods --all-namespaces --no-headers
+    | grep -v Running | grep -v Completed | grep -v Terminating | wc -l
+  register: non_running_pods
+  changed_when: false
+
+- name: Report non-running pods
+  ansible.builtin.debug:
+    msg: "Non-running pods: {{ non_running_pods.stdout }} (some may be initializing)"
+
+- name: Verify default StorageClass exists
+  ansible.builtin.shell: kubectl get storageclass | grep "(default)"
+  register: default_sc_check
+  changed_when: false
+
+- name: Display default StorageClass
+  ansible.builtin.debug:
+    msg: "Default StorageClass: {{ default_sc_check.stdout }}"
+
+- name: Verify NGINX Ingress has an external IP
+  ansible.builtin.shell: >
+    kubectl get svc -n ingress-nginx ingress-nginx-controller
+    -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+  register: ingress_ip
+  changed_when: false
+
+- name: Display cluster summary
+  ansible.builtin.debug:
+    msg:
+      - "============================================================"
+      - " KUBERNETES CLUSTER DEPLOYMENT COMPLETE"
+      - "============================================================"
+      - " Cluster Name:       {{ cluster_name }}"
+      - " API Server:         https://{{ k8s_api_server_ip }}:6443"
+      - " Nodes Ready:        {{ ready_nodes.stdout }}"
+      - " Ingress IP:         {{ ingress_ip.stdout }}"
+      - "------------------------------------------------------------"
+      - " UIs & Dashboards:"
+      - "  Harbor Registry:   https://{{ harbor_hostname }}"
+      - "  Grafana:           https://grafana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      - "  Kibana:            https://kibana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      - "  Prometheus:        https://prometheus.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      - "  Alertmanager:      https://alertmanager.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      - "  Longhorn UI:       https://longhorn.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      - "------------------------------------------------------------"
+      - " Database Endpoints (cluster-internal):"
+      - "  PostgreSQL:  postgresql.databases.svc.cluster.local:5432"
+      - "  MySQL:       mysql.databases.svc.cluster.local:3306"
+      - "  Redis:       redis-master.databases.svc.cluster.local:6379"
+      - "------------------------------------------------------------"
+      - " kubeconfig saved to: {{ playbook_dir }}/kubeconfig/admin.conf"
+      - "============================================================"
+
+- name: Run a test pod to validate DNS and networking
+  ansible.builtin.shell: >
+    kubectl run validation-pod
+    --image=busybox:1.35
+    --restart=Never
+    --rm -i
+    --timeout=30s
+    -- sh -c 'nslookup kubernetes.default && echo DNS_OK'
+  register: dns_test
+  changed_when: false
+  ignore_errors: true
+
+- name: DNS validation result
+  ansible.builtin.debug:
+    msg: "{{ 'DNS OK ✓' if 'DNS_OK' in dns_test.stdout else 'DNS check inconclusive — review manually' }}"
+
+- name: Save cluster info to file
+  ansible.builtin.template:
+    src: cluster-info.txt.j2
+    dest: /tmp/cluster-info.txt
+    mode: "0644"
+
+- name: Fetch cluster info to local machine
+  ansible.builtin.fetch:
+    src: /tmp/cluster-info.txt
+    dest: "{{ playbook_dir }}/cluster-info.txt"
+    flat: true

@@ -1,0 +1,140 @@
+---
+# =============================================================================
+# Role: woodpecker_ci — Lightweight container-native CI pipeline for Gitea
+# Developers define pipelines in .woodpecker.yml files in their repos
+# =============================================================================
+
+- name: Add Woodpecker Helm repository
+  kubernetes.core.helm_repository:
+    name: woodpecker
+    repo_url: https://woodpecker-ci.org/
+
+- name: Create Woodpecker agent secret
+  ansible.builtin.shell: >
+    kubectl create secret generic woodpecker-secret
+    --from-literal=WOODPECKER_AGENT_SECRET={{ woodpecker_agent_secret }}
+    -n {{ woodpecker_namespace }}
+    --dry-run=client -o yaml | kubectl apply -f -
+  changed_when: true
+
+- name: Install Woodpecker CI via Helm
+  kubernetes.core.helm:
+    name: woodpecker
+    chart_ref: woodpecker/woodpecker
+    chart_version: "{{ woodpecker_version }}"
+    release_namespace: "{{ woodpecker_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "10m"
+    values:
+      server:
+        enabled: true
+        # --- FIXED PORT OVERRIDE BLOCK ---
+        service:
+          port: 80
+          targetPort: 8000
+        # ---------------------------------
+        env:
+          WOODPECKER_OPEN: "true"         # Allow any Gitea user to login
+          WOODPECKER_HOST: "https://{{ woodpecker_hostname }}"
+          WOODPECKER_GITEA: "true"
+          WOODPECKER_GITEA_URL: "https://{{ gitea_hostname }}"
+          WOODPECKER_GITEA_CLIENT: "{{ woodpecker_gitea_client_id }}"
+          WOODPECKER_GITEA_SECRET: "{{ woodpecker_gitea_client_secret }}"
+          WOODPECKER_AGENT_SECRET: "{{ woodpecker_agent_secret }}"
+          WOODPECKER_ADMIN: "{{ gitea_admin_user }}"
+          WOODPECKER_LOG_LEVEL: info
+          WOODPECKER_LIMIT_MEM_ROWS: "30"
+          WOODPECKER_KEEP_FINISHED_PIPELINE_MIN: "360"
+        extraSecretNamesForEnvFrom:
+          - woodpecker-secret
+        ingress:
+          enabled: true
+          className: nginx
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-issuer
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          hosts:
+            - host: "{{ woodpecker_hostname }}"
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            - secretName: woodpecker-tls
+              hosts:
+                - "{{ woodpecker_hostname }}"
+        persistentVolume:
+          enabled: true
+          storageClass: "{{ gitea_storage_class }}"
+          size: 5Gi
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        metrics:
+          enabled: true
+          port: 9001
+
+      agent:
+        enabled: true
+        replicaCount: "{{ woodpecker_agent_replicas }}"
+        env:
+          WOODPECKER_SERVER: "woodpecker-server:9000"
+          WOODPECKER_AGENT_SECRET: "{{ woodpecker_agent_secret }}"
+          WOODPECKER_BACKEND: kubernetes
+          WOODPECKER_BACKEND_K8S_NAMESPACE: "{{ woodpecker_namespace }}"
+          WOODPECKER_BACKEND_K8S_STORAGE_CLASS: "{{ gitea_storage_class }}"
+          WOODPECKER_BACKEND_K8S_VOLUME_SIZE: "10G"
+          WOODPECKER_LOG_LEVEL: info
+          WOODPECKER_MAX_WORKFLOWS: "5"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        serviceAccount:
+          create: true
+          name: woodpecker-agent
+
+- name: Create RBAC for Woodpecker agent (K8s backend)
+  ansible.builtin.template:
+    src: woodpecker-rbac.yaml.j2
+    dest: /tmp/woodpecker-rbac.yaml
+    mode: "0644"
+
+- name: Apply Woodpecker RBAC
+  ansible.builtin.command: kubectl apply -f /tmp/woodpecker-rbac.yaml
+  changed_when: true
+
+- name: Wait for Woodpecker pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ woodpecker_namespace }} -l app.kubernetes.io/name=woodpecker
+    --no-headers | grep -v Running | grep -v Completed | wc -l
+  register: woodpecker_pods
+  until: woodpecker_pods.stdout | int == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Display Woodpecker CI access info
+  ansible.builtin.debug:
+    msg:
+      - "Woodpecker CI: https://{{ woodpecker_hostname }}"
+      - "Login with your Gitea credentials"
+      - ""
+      - "Example .woodpecker.yml pipeline for your repos:"
+      - "  steps:"
+      - "    - name: test"
+      - "      image: golang:1.22"
+      - "      commands: [go test ./...]"
+      - "    - name: build-image"
+      - "      image: plugins/docker"
+      - "      settings:"
+      - "        registry: {{ harbor_hostname }}"
+      - "        repo: {{ harbor_hostname }}/library/myapp"
+      - "        tags: [latest, '${CI_COMMIT_SHA}']"

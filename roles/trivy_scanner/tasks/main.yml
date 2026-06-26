@@ -1,0 +1,79 @@
+---
+# =============================================================================
+# Role: trivy_scanner — Deploy Trivy Operator for continuous vulnerability scanning
+# Automatically scans all container images running in the cluster
+# =============================================================================
+
+- name: Install Trivy Operator via Helm
+  kubernetes.core.helm:
+    name: trivy-operator
+    chart_ref: aqua/trivy-operator
+    chart_version: "{{ trivy_operator_version }}"
+    release_namespace: trivy-system
+    create_namespace: true
+    wait: true
+    wait_timeout: "5m"
+    values:
+      operator:
+        scanJobTimeout: 5m
+        concurrentScanJobsLimit: "10"
+        scanJobTTL: 24h
+        vulnerabilityScanner:
+          enabled: true
+          scanOnlyCurrentRevisions: false
+        configAuditScanner:
+          enabled: true
+        rbacAssessmentScanner:
+          enabled: true
+        infraAssessmentScanner:
+          enabled: true
+        clusterComplianceEnabled: true
+      serviceMonitor:
+        enabled: true
+        namespace: monitoring
+      trivyOperator:
+        vulnerabilityReportsPlugin: "Trivy"
+      trivy:
+        ignoreUnfixed: false
+        severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+        timeout: 5m0s
+        dbRepository: ghcr.io/aquasecurity/trivy-db:2
+        javaDbRepository: ghcr.io/aquasecurity/trivy-java-db:1
+      resources:
+        requests:
+          cpu: 100m
+          memory: 100M
+        limits:
+          cpu: 500m
+          memory: 500M
+
+- name: Wait for Trivy operator to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n trivy-system --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: trivy_pods
+  until: trivy_pods.stdout | int == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Create ClusterComplianceReport for CIS Kubernetes Benchmark
+  ansible.builtin.copy:
+    dest: /tmp/cis-benchmark.yaml
+    content: |
+      apiVersion: aquasecurity.github.io/v1alpha1
+      kind: ClusterComplianceReport
+      metadata:
+        name: cis
+      spec:
+        compliance:
+          id: cis
+          name: CIS Kubernetes Benchmarks
+          version: "1.23"
+          controls: []
+    mode: "0644"
+
+- name: Apply CIS Compliance Report
+  ansible.builtin.command: kubectl apply -f /tmp/cis-benchmark.yaml
+  changed_when: true
+  ignore_errors: true

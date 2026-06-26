@@ -1,0 +1,154 @@
+---
+# =============================================================================
+# Role: argocd — GitOps Continuous Delivery for Kubernetes
+# Watches Git repos and automatically syncs cluster state to match manifests
+# =============================================================================
+
+- name: Create ArgoCD namespace
+  ansible.builtin.command: kubectl create namespace {{ argocd_namespace }}
+  ignore_errors: true
+  changed_when: true
+
+- name: Add ArgoCD Helm repository
+  kubernetes.core.helm_repository:
+    name: argo
+    repo_url: https://argoproj.github.io/argo-helm
+
+- name: Hash ArgoCD admin password (bcrypt)
+  ansible.builtin.shell: >
+    htpasswd -nbBC 10 "" "{{ argocd_admin_password }}"
+    | tr -d ':\n' | sed 's/$2y/$2a/'
+  register: argocd_bcrypt_password
+  changed_when: false
+  no_log: true
+
+- name: Install ArgoCD via Helm
+  kubernetes.core.helm:
+    name: argocd
+    chart_ref: argo/argo-cd
+    chart_version: "{{ argocd_version }}"
+    release_namespace: "{{ argocd_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "10m"
+    values:
+      global:
+        domain: "{{ argocd_hostname }}"
+
+      configs:
+        secret:
+          argocdServerAdminPassword: "{{ argocd_bcrypt_password.stdout }}"
+          argocdServerAdminPasswordMtime: "2024-01-01T00:00:00Z"
+        params:
+          server.insecure: false
+          server.disable.auth: false
+        cm:
+          # Gitea OIDC integration (via Keycloak or Gitea OAuth2)
+          url: "https://{{ argocd_hostname }}"
+          repositories: |
+            - url: https://{{ gitea_hostname }}
+              name: gitea
+              type: git
+          resource.customizations.ignoreDifferences.all: |
+            managedFieldsManagers:
+            - kube-controller-manager
+        rbac:
+          policy.csv: |
+            g, sriit:admin, role:admin
+            g, sriit:developers, role:readonly
+          scopes: "[groups]"
+
+      server:
+        ingress:
+          enabled: true
+          ingressClassName: nginx
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-issuer
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+          hosts:
+            - "{{ argocd_hostname }}"
+          tls:
+            - secretName: argocd-tls
+              hosts:
+                - "{{ argocd_hostname }}"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+      applicationSet:
+        enabled: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+
+      notifications:
+        enabled: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+
+      redis:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+
+      repoServer:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+          namespace: monitoring
+
+- name: Wait for ArgoCD pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ argocd_namespace }} --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: argocd_pods
+  until: argocd_pods.stdout | int == 0
+  retries: 40
+  delay: 15
+  changed_when: false
+
+- name: Apply ArgoCD Projects (team-based RBAC)
+  ansible.builtin.template:
+    src: argocd-projects.yaml.j2
+    dest: /tmp/argocd-projects.yaml
+    mode: "0644"
+
+- name: Create default ArgoCD AppProject
+  ansible.builtin.command: kubectl apply -f /tmp/argocd-projects.yaml
+  changed_when: true
+
+- name: Display ArgoCD access info
+  ansible.builtin.debug:
+    msg:
+      - "ArgoCD UI:    https://{{ argocd_hostname }}"
+      - "Admin User:   admin"
+      - "Admin Pass:   {{ argocd_admin_password }}"
+      - ""
+      - "GITOPS WORKFLOW:"
+      - "1. Push app manifests/Helm charts to Gitea"
+      - "2. Create an ArgoCD Application pointing to your Gitea repo"
+      - "3. ArgoCD auto-syncs cluster to match Git state"
+      - ""
+      - "CLI quick start:"
+      - "  argocd login {{ argocd_hostname }} --username admin"
+      - "  argocd app create my-app \\"
+      - "    --repo https://{{ gitea_hostname }}/team/my-app.git \\"
+      - "    --path k8s/ --dest-namespace default"

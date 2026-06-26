@@ -1,0 +1,107 @@
+---
+# Kong Global Plugins — applied cluster-wide to all routes via KongClusterPlugin
+
+# ── Rate Limiting (100 req/min per consumer, 1000 req/min globally) ──────────
+apiVersion: configuration.konghq.com/v1
+kind: KongClusterPlugin
+metadata:
+  name: global-rate-limiting
+  annotations:
+    kubernetes.io/ingress.class: kong
+  labels:
+    global: "true"
+plugin: rate-limiting
+config:
+  minute: 1000
+  hour: 10000
+  policy: local
+  fault_tolerant: true
+  hide_client_headers: false
+---
+# ── CORS (allow browser-based API access) ────────────────────────────────────
+apiVersion: configuration.konghq.com/v1
+kind: KongClusterPlugin
+metadata:
+  name: global-cors
+  annotations:
+    kubernetes.io/ingress.class: kong
+  labels:
+    global: "true"
+plugin: cors
+config:
+  origins:
+    - "*"
+  methods:
+    - GET
+    - POST
+    - PUT
+    - PATCH
+    - DELETE
+    - OPTIONS
+    - HEAD
+  headers:
+    - Accept
+    - Authorization
+    - Content-Type
+    - X-Request-ID
+  exposed_headers:
+    - X-Auth-Token
+    - X-RateLimit-Remaining-Minute
+  credentials: true
+  max_age: 3600
+---
+# ── Bot Detection (block known bots from the API) ────────────────────────────
+apiVersion: configuration.konghq.com/v1
+kind: KongClusterPlugin
+metadata:
+  name: global-bot-detection
+  annotations:
+    kubernetes.io/ingress.class: kong
+  labels:
+    global: "true"
+plugin: bot-detection
+config:
+  allow: []
+  deny:
+    - googlebot
+    - bingbot
+    - semrushbot
+---
+# ── Proxy Cache (cache GET responses for 300s) ───────────────────────────────
+apiVersion: configuration.konghq.com/v1
+kind: KongClusterPlugin
+metadata:
+  name: global-proxy-cache
+  annotations:
+    kubernetes.io/ingress.class: kong
+  labels:
+    global: "true"
+plugin: proxy-cache
+config:
+  response_code:
+    - 200
+    - 301
+    - 404
+  request_method:
+    - GET
+    - HEAD
+  content_type:
+    - application/json
+    - application/json; charset=utf-8
+  cache_ttl: 300
+  strategy: memory
+---
+# ── JWT Auth example plugin (apply per-route, not globally) ──────────────────
+# To protect a specific route, annotate your Ingress/KongIngress:
+#   konghq.com/plugins: jwt-auth
+apiVersion: configuration.konghq.com/v1
+kind: KongClusterPlugin
+metadata:
+  name: jwt-auth
+  namespace: {{ kong_namespace }}
+plugin: jwt
+config:
+  key_claim_name: kid
+  claims_to_verify:
+    - exp
+  maximum_expiration: 3600

@@ -1,0 +1,60 @@
+---
+# =============================================================================
+# Kubeadm initialization configuration
+# Docs: https://kubernetes.io/docs/reference/config-api/kubeadm-config.v1beta3/
+# =============================================================================
+
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: {{ ansible_host }}
+  bindPort: 6443
+nodeRegistration:
+  criSocket: unix:///run/containerd/containerd.sock
+  name: {{ inventory_hostname }}
+  kubeletExtraArgs:
+    node-ip: {{ ansible_host }}
+
+---
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+clusterName: {{ cluster_name }}
+kubernetesVersion: v{{ kubernetes_version }}.0
+controlPlaneEndpoint: "{{ k8s_api_server_ip }}:6443"
+networking:
+  podSubnet: {{ pod_network_cidr }}
+  serviceSubnet: {{ service_network_cidr }}
+  dnsDomain: {{ cluster_domain }}
+apiServer:
+  extraArgs:
+    authorization-mode: "Node,RBAC"
+    audit-log-path: "/var/log/kubernetes/audit.log"
+    audit-log-maxage: "30"
+    audit-log-maxbackup: "10"
+    audit-log-maxsize: "100"
+    enable-admission-plugins: "NodeRestriction,PodSecurity"
+  extraVolumes:
+    - name: audit-log
+      hostPath: /var/log/kubernetes
+      mountPath: /var/log/kubernetes
+      readOnly: false
+controllerManager:
+  extraArgs:
+    bind-address: "0.0.0.0"
+scheduler:
+  extraArgs:
+    bind-address: "0.0.0.0"
+
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd
+serverTLSBootstrap: true
+containerLogMaxSize: "10Mi"
+containerLogMaxFiles: 5
+maxPods: 110
+
+---
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+mode: "ipvs"

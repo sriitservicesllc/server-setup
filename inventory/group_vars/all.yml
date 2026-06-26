@@ -1,0 +1,265 @@
+---
+# =============================================================================
+# Global Cluster Variables
+# All values here are overridable per host or per group in inventory/
+# =============================================================================
+
+# ── Kubernetes Version ──────────────────────────────────────────────────────
+kubernetes_version: "1.29"
+kubernetes_version_full: "1.29.6-1.1"
+containerd_version: "1.7.*"
+
+# ── Cluster Network ─────────────────────────────────────────────────────────
+k8s_api_server_ip: "{{ hostvars[groups['k8s_masters'][0]].ansible_host }}"
+pod_network_cidr: "10.244.0.0/16"          # Flannel default; change if using Calico
+service_network_cidr: "10.96.0.0/12"
+cluster_dns_ip: "10.96.0.10"
+cluster_name: "sriit-prod"
+cluster_domain: "cluster.local"
+
+# ── CNI Plugin ──────────────────────────────────────────────────────────────
+# Options: calico | flannel
+cni_plugin: "calico"
+calico_version: "v3.27.3"
+
+# ── MetalLB (Bare-Metal LoadBalancer) ───────────────────────────────────────
+metallb_enabled: true
+metallb_version: "v0.14.5"
+# IP range to assign to LoadBalancer services (must be on your LAN)
+metallb_ip_range: "192.168.1.200-192.168.1.220"
+
+# ── NGINX Ingress Controller ────────────────────────────────────────────────
+ingress_nginx_enabled: true
+ingress_nginx_version: "4.15.1"
+
+# ── cert-manager (TLS) ──────────────────────────────────────────────────────
+cert_manager_enabled: true
+cert_manager_version: "v1.14.5"
+cert_manager_email: "devops@sriitservices.com"   # Let's Encrypt notifications
+
+# ── Storage ─────────────────────────────────────────────────────────────────
+storage_enabled: true
+# Longhorn provides replicated distributed block storage
+longhorn_version: "1.12.0"
+longhorn_replica_count: 2         # number of data replicas across nodes
+longhorn_data_path: "/var/lib/longhorn"
+
+# ── Docker Registry (Harbor) ────────────────────────────────────────────────
+harbor_enabled: true
+harbor_namespace: "harbor"
+harbor_version: "1.19.1"           # Helm chart version
+harbor_hostname: "registry.sriitservices.local"
+harbor_admin_password: "Harbor12345!"   # CHANGE THIS — use vault in production
+harbor_storage_class: "longhorn"
+harbor_storage_size: "10Gi"
+
+# ── Trivy (Container Image Scanner) ─────────────────────────────────────────
+trivy_operator_enabled: true
+trivy_operator_version: "0.33.2"   # Helm chart version
+
+# ── Databases ───────────────────────────────────────────────────────────────
+postgresql_enabled: true
+postgresql_namespace: "databases"
+postgresql_version: "18.7.8"       # Bitnami PostgreSQL Helm chart (App v18+)
+postgresql_storage_class: "longhorn"
+postgresql_storage_size: "5Gi"
+postgresql_password: "PgAdmin@Prod!"   # CHANGE — use vault in production
+postgresql_replication_enabled: true
+postgresql_read_replicas: 2
+
+mysql_enabled: false
+mysql_namespace: "databases"
+mysql_version: "14.0.3"            # Bitnami MySQL Helm chart (App v9.4+)
+mysql_storage_class: "longhorn"
+mysql_storage_size: "5Gi"
+mysql_root_password: "MySQL@Root1!"  # CHANGE — use vault in production
+
+redis_enabled: true
+redis_namespace: "databases"
+redis_version: "27.0.12"           # Bitnami Redis Helm chart (App v8.8+)
+redis_storage_class: "longhorn"
+redis_storage_size: "2Gi"
+redis_password: "Redis@Cache1!"     # CHANGE — use vault in production
+
+# ── Logging (EFK Stack) ─────────────────────────────────────────────────────
+logging_enabled: true
+logging_namespace: "logging"
+eck_operator_version: "3.4.0"
+elasticsearch_version: "8.15.3"
+elasticsearch_storage_class: "longhorn"
+elasticsearch_storage_size: "5Gi"
+elasticsearch_replicas: 1          # 3 for HA
+kibana_version: "8.5.1"
+
+# ── Monitoring (kube-prometheus-stack) ──────────────────────────────────────
+monitoring_enabled: true
+monitoring_namespace: "monitoring"
+kube_prometheus_stack_version: "87.1.0"   # Helm chart version
+grafana_admin_password: "Grafana@Admin1!"  # CHANGE — use vault in production
+prometheus_storage_class: "longhorn"
+prometheus_storage_size: "5Gi"
+grafana_storage_size: "2Gi"
+alertmanager_storage_size: "2Gi"
+
+# ── External DNS (optional) ──────────────────────────────────────────────────
+external_dns_enabled: false        # Set true if using a DNS provider
+external_dns_provider: "cloudflare"
+external_dns_domain_filter: "sriitservices.com"
+
+# ── MinIO (In-cluster S3-compatible Object Store) ────────────────────────────
+minio_enabled: true
+minio_namespace: "minio"
+minio_version: "5.0.14"           # Bitnami MinIO Helm chart
+minio_storage_class: "longhorn"
+minio_storage_size: "10Gi"
+minio_root_user: "minioadmin"
+minio_root_password: "Minio@Admin1!"  # CHANGE — use vault
+# Buckets auto-created on startup
+minio_buckets:
+  - name: velero-backups
+  - name: sonarqube-data
+  - name: wiki-uploads
+minio_hostname: "minio.sriitservices.local"
+minio_console_hostname: "minio-console.sriitservices.local"
+
+# ── Velero (Backup → MinIO → OneDrive via rclone) ───────────────────────────
+velero_enabled: false
+velero_version: "6.5.0"            # Helm chart version
+velero_namespace: "velero"
+velero_backup_storage_location: "minio-local"
+velero_s3_bucket: "velero-backups"
+velero_s3_region: "us-east-1"     # MinIO ignores this but requires a value
+velero_s3_endpoint: "http://minio.minio.svc.cluster.local:9000"
+# OneDrive sync via rclone CronJob
+velero_onedrive_sync_enabled: true
+velero_onedrive_sync_schedule: "0 3 * * *"   # Daily at 3 AM
+# OneDrive rclone config — fill after running 'rclone config' manually
+velero_onedrive_client_id: ""      # Azure app client ID
+velero_onedrive_client_secret: ""  # Azure app client secret
+velero_onedrive_token: ""          # Paste JSON token from 'rclone config'
+velero_onedrive_folder: "k8s-backups/{{ cluster_name }}"
+
+# ── Kong API Gateway ─────────────────────────────────────────────────────────
+kong_enabled: true
+kong_namespace: "kong"
+kong_version: "3.4.0"              # Kong Helm chart version (App v3.9+)
+kong_proxy_hostname: "api.sriitservices.local"       # Public API entrypoint
+kong_manager_hostname: "kong-manager.sriitservices.local"  # Admin UI
+kong_admin_api_hostname: "kong-admin.sriitservices.local"  # Admin REST API
+kong_storage_class: "longhorn"
+kong_db_storage_size: "2Gi"
+kong_db_password: "Kong@Admin1!"
+# Kong plugins enabled by default
+kong_plugins:
+  - rate-limiting
+  - cors
+  - jwt
+  - key-auth
+  - request-termination
+  - proxy-cache
+  - ip-restriction
+  - bot-detection
+  - response-ratelimiting
+
+# ── Gitea (Self-Hosted Git — Email-based Authentication) ─────────────────────
+gitea_enabled: true
+gitea_namespace: "devops"
+gitea_version: "12.6.0"            # Gitea Helm chart version (App v1.26+)
+gitea_hostname: "git.sriitservices.local"
+gitea_admin_user: "gitadmin"
+gitea_admin_password: "Gitea@Admin1!"  # CHANGE — use vault
+gitea_admin_email: "gitadmin@sriitservices.com"
+gitea_db_password: "Gitea@DBPass1!"  # CHANGE — use vault
+gitea_storage_class: "longhorn"
+gitea_storage_size: "5Gi"
+# Email / SMTP settings for account registration & notifications
+gitea_smtp_enabled: false          # Set true and configure below to enable email
+gitea_smtp_host: "smtp.gmail.com"
+gitea_smtp_port: 587
+gitea_smtp_user: ""
+gitea_smtp_password: ""            # CHANGE — use vault
+gitea_smtp_from: "gitea@sriitservices.com"
+# Registration settings
+gitea_allow_registration: true     # Set false after initial team setup
+gitea_require_signin: false        # Set true to force login for browsing
+
+# ── Woodpecker CI (Container-native CI for Gitea) ───────────────────────────
+woodpecker_enabled: true
+woodpecker_namespace: "devops"
+woodpecker_version: "3.6.4"        # Woodpecker Helm chart version (App v3.15+)
+woodpecker_hostname: "ci.sriitservices.local"
+woodpecker_agent_replicas: 3
+# These are filled automatically after Gitea is deployed
+woodpecker_gitea_client_id: ""     # Create OAuth app in Gitea → Settings → Apps
+woodpecker_gitea_client_secret: ""
+woodpecker_agent_secret: "WoodpeckerAgentSecret1!"  # CHANGE
+
+# ── ArgoCD (GitOps Continuous Delivery) ─────────────────────────────────────
+argocd_enabled: true
+argocd_namespace: "argocd"
+argocd_version: "9.7.0"            # ArgoCD Helm chart version (App v3.4+)
+argocd_hostname: "argocd.sriitservices.local"
+argocd_admin_password: "ArgoCD@Admin1!"   # CHANGE — use vault
+# Connect ArgoCD to Gitea
+argocd_gitea_url: "https://{{ gitea_hostname }}"
+
+# ── SonarQube (Code Quality Analysis) ───────────────────────────────────────
+sonarqube_enabled: true
+sonarqube_namespace: "devops"
+sonarqube_version: "2026.3.1"      # SonarQube Helm chart version
+sonarqube_hostname: "sonar.sriitservices.local"
+sonarqube_admin_password: "Sonar@Admin1!"  # CHANGE — use vault
+sonarqube_storage_class: "longhorn"
+sonarqube_storage_size: "2Gi"
+sonarqube_db_storage_size: "2Gi"
+
+# ── OpenBao (OSS Secrets Management — MPL-2.0) ─────────────────────────────────
+# OpenBao is the Linux Foundation fork of Vault (Vault is BSL 1.1 — NOT OSS)
+vault_enabled: false
+vault_namespace: "vault"
+vault_version: "0.10.0"            # OpenBao Helm chart version (openbao/openbao)
+vault_hostname: "vault.sriitservices.local"
+vault_storage_class: "longhorn"
+vault_storage_size: "2Gi"
+vault_replicas: 1                  # Set to 3 for HA Raft cluster
+
+# ── Wiki.js (Team Documentation) ─────────────────────────────────────────────
+wiki_js_enabled: false
+wiki_js_namespace: "collaboration"
+wiki_js_version: "2.2.20"          # Wiki.js Helm chart version
+wiki_js_hostname: "wiki.sriitservices.local"
+wiki_js_storage_class: "longhorn"
+wiki_js_storage_size: "2Gi"
+
+# ── Mattermost (Team Chat) ───────────────────────────────────────────────────
+mattermost_enabled: false
+mattermost_namespace: "collaboration"
+mattermost_version: "6.6.101"      # Mattermost Team Edition Helm chart version (App v11.8+)
+mattermost_hostname: "chat.sriitservices.local"
+mattermost_storage_class: "longhorn"
+mattermost_storage_size: "2Gi"
+mattermost_db_storage_size: "2Gi"
+mattermost_admin_email: "admin@sriitservices.com"
+mattermost_admin_username: "sysadmin"
+mattermost_admin_password: "Mattermost@Admin1!"  # CHANGE — use vault
+mattermost_site_name: "SRIIT Team Chat"
+
+# ── Infisical Vault ───────────────────────────────────────────────────────────── 
+infisical_enabled: true
+infisical_namespace: "infisical"
+infisical_hostname: "infisical.sriitservices.local"
+infisical_db_password: "InfisicalDB@Admin1!"
+infisical_encryption_key: "8f7d7f1c9f3c3f6f7d2a0d9c4b6e5f1a8c3d7e9f2b4c6d8e1f3a5b7c9d0e2f4"
+infisical_auth_secret: "ka0Y7SHsQek7+8g22kApyzZBIbBIvIN0Cabt8rn4xkk="
+infisical_jwt_secret: "0240d708adfbfafcc7262a5688fd3890"
+ 
+
+# ── Node settings ────────────────────────────────────────────────────────────
+kernel_modules:
+  - overlay
+  - br_netfilter
+
+sysctl_settings:
+  net.bridge.bridge-nf-call-iptables: 1
+  net.bridge.bridge-nf-call-ip6tables: 1
+  net.ipv4.ip_forward: 1

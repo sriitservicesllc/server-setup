@@ -1,0 +1,78 @@
+---
+# =============================================================================
+# Role: ingress_nginx — Deploy NGINX Ingress Controller
+# Exposes apps to the outside world via HTTP/HTTPS Ingress resources
+# =============================================================================
+
+- name: Install NGINX Ingress Controller via Helm
+  kubernetes.core.helm:
+    name: ingress-nginx
+    chart_ref: ingress-nginx/ingress-nginx
+    chart_version: "{{ ingress_nginx_version }}"
+    release_namespace: ingress-nginx
+    create_namespace: true
+    wait: true
+    wait_timeout: "5m"
+    values:
+      controller:
+        replicaCount: 2
+        service:
+          type: LoadBalancer
+          externalTrafficPolicy: Local
+        config:
+          use-real-ip: "true"
+          proxy-buffer-size: "16k"
+          proxy-body-size: "50m"
+          ssl-protocols: "TLSv1.2 TLSv1.3"
+          ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256"
+          hsts: "true"
+          hsts-max-age: "31536000"
+          keep-alive: "75"
+          keep-alive-requests: "10000"
+        metrics:
+          enabled: true
+          serviceMonitor:
+            enabled: true
+            namespace: monitoring
+        podAnnotations:
+          prometheus.io/scrape: "true"
+          prometheus.io/port: "10254"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 90Mi
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+        autoscaling:
+          enabled: true
+          minReplicas: 2
+          maxReplicas: 10
+          targetCPUUtilizationPercentage: 80
+      defaultBackend:
+        enabled: true
+
+- name: Wait for NGINX Ingress pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n ingress-nginx --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: nginx_pods
+  until: nginx_pods.stdout | int == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Get NGINX Ingress LoadBalancer IP
+  ansible.builtin.shell: >
+    kubectl get svc -n ingress-nginx ingress-nginx-controller
+    -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+  register: ingress_lb_ip
+  until: ingress_lb_ip.stdout != ""
+  retries: 20
+  delay: 10
+  changed_when: false
+  check_mode: false
+
+- name: Display NGINX Ingress external IP
+  ansible.builtin.debug:
+    msg: "NGINX Ingress LoadBalancer IP: {{ ingress_lb_ip.stdout }} — Point your DNS records here!"

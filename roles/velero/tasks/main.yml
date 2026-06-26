@@ -1,0 +1,187 @@
+---
+# =============================================================================
+# Role: velero — Cluster backup with MinIO as local target + rclone → OneDrive
+#
+# Backup Strategy (3-2-1 principle):
+#   3 copies: live cluster data + MinIO local + OneDrive cloud
+#   2 media:  local block storage (Longhorn) + cloud object storage (OneDrive)
+#   1 offsite: OneDrive
+#
+# Architecture:
+#   Velero ──► MinIO (in-cluster, fast) ──► rclone CronJob ──► OneDrive
+# =============================================================================
+
+- name: Download Velero CLI
+  ansible.builtin.get_url:
+    url: "https://github.com/vmware-tanzu/velero/releases/download/v1.13.2/velero-v1.13.2-linux-amd64.tar.gz"
+    dest: /tmp/velero.tar.gz
+    mode: "0644"
+
+- name: Extract Velero CLI
+  ansible.builtin.unarchive:
+    src: /tmp/velero.tar.gz
+    dest: /tmp/
+    remote_src: true
+
+- name: Install Velero CLI to /usr/local/bin
+  ansible.builtin.copy:
+    src: /tmp/velero-v1.13.2-linux-amd64/velero
+    dest: /usr/local/bin/velero
+    mode: "0755"
+    remote_src: true
+
+- name: Create Velero namespace
+  ansible.builtin.command: kubectl create namespace {{ velero_namespace }}
+  ignore_errors: true
+  changed_when: true
+
+# ── MinIO credentials for Velero ─────────────────────────────────────────────
+- name: Create MinIO credentials file for Velero
+  ansible.builtin.copy:
+    dest: /tmp/velero-minio-credentials
+    content: |
+      [default]
+      aws_access_key_id={{ minio_root_user }}
+      aws_secret_access_key={{ minio_root_password }}
+    mode: "0600"
+
+- name: Create Velero cloud credentials secret
+  ansible.builtin.shell: >
+    kubectl create secret generic cloud-credentials
+    -n {{ velero_namespace }}
+    --from-file=cloud=/tmp/velero-minio-credentials
+    --dry-run=client -o yaml | kubectl apply -f -
+  changed_when: true
+
+- name: Install Velero via Helm (targeting MinIO)
+  kubernetes.core.helm:
+    name: velero
+    chart_ref: vmware-tanzu/velero
+    chart_version: "{{ velero_version }}"
+    release_namespace: "{{ velero_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "10m"
+    values:
+      credentials:
+        existingSecret: cloud-credentials
+      configuration:
+        provider: aws
+        backupStorageLocation:
+          name: "{{ velero_backup_storage_location }}"
+          provider: aws
+          bucket: "{{ velero_s3_bucket }}"
+          config:
+            region: "{{ velero_s3_region }}"
+            s3Url: "{{ velero_s3_endpoint }}"
+            s3ForcePathStyle: "true"
+            publicUrl: "{{ velero_s3_endpoint }}"
+        volumeSnapshotLocation:
+          name: default
+          provider: aws
+          config:
+            region: "{{ velero_s3_region }}"
+      initContainers:
+        - name: velero-plugin-for-aws
+          image: velero/velero-plugin-for-aws:v1.9.0
+          volumeMounts:
+            - mountPath: /target
+              name: plugins
+      schedules:
+        daily-backup:
+          schedule: "0 1 * * *"
+          template:
+            ttl: 168h0m0s
+            includedNamespaces:
+              - databases
+              - logging
+              - harbor
+              - devops
+              - auth
+              - vault
+              - collaboration
+        weekly-full-backup:
+          schedule: "0 0 * * 0"
+          template:
+            ttl: 720h0m0s
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+          namespace: monitoring
+      resources:
+        requests:
+          cpu: 500m
+          memory: 128Mi
+        limits:
+          cpu: 1000m
+          memory: 512Mi
+
+- name: Wait for Velero pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ velero_namespace }} --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: velero_pods
+  until: velero_pods.stdout | int == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+# ── rclone OneDrive Sync ──────────────────────────────────────────────────────
+- name: Deploy rclone OneDrive sync (MinIO → OneDrive CronJob)
+  when: velero_onedrive_sync_enabled | bool
+  block:
+    - name: Create rclone config secret
+      ansible.builtin.template:
+        src: rclone-config.j2
+        dest: /tmp/rclone.conf
+        mode: "0600"
+
+    - name: Create rclone config Kubernetes secret
+      ansible.builtin.shell: >
+        kubectl create secret generic rclone-onedrive-config
+        -n {{ velero_namespace }}
+        --from-file=rclone.conf=/tmp/rclone.conf
+        --dry-run=client -o yaml | kubectl apply -f -
+      changed_when: true
+
+    - name: Remove temp rclone config file
+      ansible.builtin.file:
+        path: /tmp/rclone.conf
+        state: absent
+
+    - name: Deploy rclone OneDrive sync CronJob
+      ansible.builtin.template:
+        src: rclone-sync-cronjob.yaml.j2
+        dest: /tmp/rclone-sync-cronjob.yaml
+        mode: "0644"
+
+    - name: Apply rclone sync CronJob
+      ansible.builtin.command: kubectl apply -f /tmp/rclone-sync-cronjob.yaml
+      changed_when: true
+
+- name: Display Velero + OneDrive backup info
+  ansible.builtin.debug:
+    msg:
+      - "============================================================"
+      - " BACKUP ARCHITECTURE"
+      - "============================================================"
+      - " Velero → MinIO ({{ velero_s3_endpoint }})"
+      - " Daily backups at 01:00 UTC → 7 days retention"
+      - " Weekly full backups → 30 days retention"
+      - " rclone sync → OneDrive at {{ velero_onedrive_sync_schedule }}"
+      - "------------------------------------------------------------"
+      - " MANUAL BACKUP:"
+      - "   velero backup create on-demand-$(date +%Y%m%d)"
+      - " LIST BACKUPS:"
+      - "   velero backup get"
+      - " RESTORE:"
+      - "   velero restore create --from-backup <backup-name>"
+      - "------------------------------------------------------------"
+      - " ONEDRIVE SETUP (one-time manual step):"
+      - "   1. Install rclone locally: https://rclone.org/install"
+      - "   2. Run: rclone config → choose OneDrive → follow OAuth flow"
+      - "   3. Copy the 'token' JSON value from ~/.config/rclone/rclone.conf"
+      - "   4. Set velero_onedrive_token in vault.yml and re-run:"
+      - "      ansible-playbook site.yml --tags velero --ask-vault-pass"
+      - "============================================================"

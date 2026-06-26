@@ -1,0 +1,85 @@
+---
+# =============================================================================
+# Role: storage_longhorn — Deploy Longhorn distributed block storage
+# Provides replicated PersistentVolumes across worker nodes
+# =============================================================================
+
+- name: Check Longhorn prerequisites on storage nodes
+  ansible.builtin.command: "which iscsiadm"
+  register: iscsi_check
+  changed_when: false
+  ignore_errors: true
+
+- name: Create Longhorn data directory on all nodes
+  ansible.builtin.file:
+    path: "{{ longhorn_data_path }}"
+    state: directory
+    mode: "0755"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['k8s_cluster'] }}"
+
+- name: Install Longhorn via Helm
+  kubernetes.core.helm:
+    name: longhorn
+    chart_ref: longhorn/longhorn
+    chart_version: "{{ longhorn_version }}"
+    release_namespace: longhorn-system
+    create_namespace: true
+    wait: true
+    wait_timeout: "10m"
+    values:
+      defaultSettings:
+        defaultReplicaCount: "{{ longhorn_replica_count }}"
+        defaultDataPath: "{{ longhorn_data_path }}"
+        nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
+        storageMinimalAvailablePercentage: "10"
+        storageOverProvisioningPercentage: "100"
+        backupCompressionMethod: lz4
+        autoSalvage: true
+        autoDeletePodWhenVolumeDetachedUnexpectedly: true
+        replicaSoftAntiAffinity: true
+      persistence:
+        defaultClass: true
+        defaultClassReplicaCount: "{{ longhorn_replica_count }}"
+        reclaimPolicy: Retain
+      ingress:
+        enabled: true
+        ingressClassName: nginx
+        host: "longhorn.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      longhornUI:
+        replicas: 2
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+
+- name: Wait for Longhorn system pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n longhorn-system --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: longhorn_pods
+  until: longhorn_pods.stdout | int == 0
+  retries: 40
+  delay: 15
+  changed_when: false
+
+- name: Create additional StorageClasses
+  ansible.builtin.template:
+    src: storage-classes.yaml.j2
+    dest: /tmp/storage-classes.yaml
+    mode: "0644"
+
+- name: Apply StorageClasses
+  ansible.builtin.command: kubectl apply -f /tmp/storage-classes.yaml
+  changed_when: true
+
+- name: Verify default StorageClass
+  ansible.builtin.command: >
+    kubectl get storageclass longhorn
+    -o jsonpath='{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}'
+  register: default_sc
+  changed_when: false
+
+- name: Display storage class status
+  ansible.builtin.debug:
+    msg: "Longhorn is default StorageClass: {{ default_sc.stdout }}"

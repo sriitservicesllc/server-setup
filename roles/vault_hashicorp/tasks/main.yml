@@ -1,0 +1,226 @@
+---
+# =============================================================================
+# Role: vault_hashicorp — OpenBao Secrets Management (MPL-2.0)
+#
+# OpenBao is the Linux Foundation fork of HashiCorp Vault, created after
+# HashiCorp changed Vault's license to BSL 1.1 (non-OSI) in August 2023.
+#
+# OpenBao:
+#   ✓ MPL-2.0 license (true open source, OSI-approved)
+#   ✓ Drop-in replacement for HashiCorp Vault (100% API-compatible)
+#   ✓ Governed by the Linux Foundation
+#   ✓ Includes features previously restricted to Vault Enterprise:
+#       - Namespaces, performance standbys, HSM support
+#
+# HashiCorp Vault is NOT used here — it is BSL 1.1 (non-OSS since v1.14).
+#
+# Helm repo: https://openbao.github.io/openbao-helm
+# Image:     ghcr.io/openbao/openbao  (MPL-2.0)
+# Docs:      https://openbao.org/docs/
+# =============================================================================
+
+- name: Create OpenBao namespace
+  ansible.builtin.command: kubectl create namespace {{ vault_namespace }}
+  ignore_errors: true
+  changed_when: true
+
+- name: Add OpenBao Helm repository
+  kubernetes.core.helm_repository:
+    name: openbao
+    repo_url: https://openbao.github.io/openbao-helm
+
+- name: Update Helm repos
+  ansible.builtin.command: helm repo update openbao
+  changed_when: false
+
+- name: Create OpenBao values file
+  ansible.builtin.copy:
+    dest: /tmp/openbao-values.yaml
+    mode: "0600"
+    content: |
+      global:
+        imageRegistry: ""
+        enabled: true
+        tlsDisable: true    # TLS terminated at NGINX Ingress
+
+      # ── Agent Injector (sidecar for pod secret injection) ──────────────────
+      injector:
+        enabled: false
+        image:
+          registry: ghcr.io
+          repository: openbao/openbao
+          tag: "2.2.0"
+          pullPolicy: IfNotPresent
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 250m
+          limits:
+            memory: 256Mi
+            cpu: 250m
+
+      # ── OpenBao Server ─────────────────────────────────────────────────────
+      server:
+        enabled: true
+        test:
+            enabled: false
+        image:
+          registry: ghcr.io
+          repository: openbao/openbao
+          tag: "2.2.0"
+          pullPolicy: IfNotPresent
+        logLevel: info
+        logFormat: json
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 250m
+          limits:
+            memory: 512Mi
+            cpu: 500m
+        # Readiness: returns 200 even when sealed or uninitialized
+        readinessProbe:
+          enabled: true
+          path: "/v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204"
+        livenessProbe:
+          enabled: true
+          path: "/v1/sys/health?standbyok=true"
+          initialDelaySeconds: 60
+        # Persistent storage for audit logs
+        auditStorage:
+          enabled: true
+          storageClass: "{{ vault_storage_class }}"
+          size: 10Gi
+        # Persistent storage for data (Raft integrated storage)
+        dataStorage:
+          enabled: true
+          storageClass: "{{ vault_storage_class }}"
+          size: "{{ vault_storage_size }}"
+        # ── Standalone configuration (single node, Raft storage) ──────────────
+        standalone:
+          enabled: true
+          config: |
+            ui = true
+            log_level = "info"
+            listener "tcp" {
+              address     = "[::]:8200"
+              cluster_address = "[::]:8201"
+              tls_disable = 1
+            }
+            storage "raft" {
+              path = "/openbao/data"
+              node_id = "openbao-0"
+            }
+            telemetry {
+              prometheus_retention_time = "30s"
+              disable_hostname = true
+            }
+        # ── Ingress for Web UI ────────────────────────────────────────────────
+        ingress:
+          enabled: true
+          ingressClassName: nginx
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-issuer
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+          hosts:
+            - host: "{{ vault_hostname }}"
+              paths: [/]
+          tls:
+            - secretName: openbao-tls
+              hosts:
+                - "{{ vault_hostname }}"
+
+      ui:
+        enabled: true
+        serviceType: ClusterIP
+
+
+
+
+# Crucial Fix: Deletes the bare test pod if it exists from a previous raw kubectl apply run
+- name: Clean up lingering test pod if present
+  ansible.builtin.command: >
+    kubectl delete pod openbao-server-test -n {{ vault_namespace }} --ignore-not-found=true
+  changed_when: false
+
+# Native Helm upgrade/install prevents template rendering resource immutability loops
+- name: Install or Update OpenBao via Helm
+  kubernetes.core.helm:
+    name: openbao
+    chart_ref: openbao/openbao
+    release_namespace: "{{ vault_namespace }}"
+    chart_version: "{{ vault_version }}"
+    values_files:
+      - /tmp/openbao-values.yaml
+
+- name: Wait for OpenBao pod to be scheduled
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ vault_namespace }} -l app.kubernetes.io/name=openbao
+    --no-headers | wc -l
+  register: bao_pods
+  until: bao_pods.stdout | int >= 1
+  retries: 20
+  delay: 10
+  changed_when: false
+
+- name: Wait for OpenBao container to start
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ vault_namespace }} openbao-0
+    -o jsonpath='{.status.containerStatuses[0].started}' 2>/dev/null || echo "false"
+  register: bao_started
+  until: bao_started.stdout == "true"
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Initialize OpenBao (first run only)
+  ansible.builtin.shell: >
+    kubectl exec -n {{ vault_namespace }} openbao-0
+    -- bao operator init
+    -key-shares=5
+    -key-threshold=3
+    -format=json
+  register: bao_init_output
+  changed_when: true
+  ignore_errors: true
+
+- name: Save OpenBao unseal keys and root token locally
+  ansible.builtin.copy:
+    content: "{{ bao_init_output.stdout }}"
+    dest: "{{ playbook_dir }}/openbao-init-keys.json"
+    mode: "0600"
+  when: bao_init_output.rc is defined and bao_init_output.rc == 0
+  delegate_to: localhost
+  become: false
+
+- name: Display OpenBao information
+  ansible.builtin.debug:
+    msg:
+      - "======================================================="
+      - " OpenBao (MPL-2.0 — Linux Foundation)"
+      - " HashiCorp Vault is NOT used (BSL 1.1, non-OSS)"
+      - " Image: ghcr.io/openbao/openbao (OSS)"
+      - "======================================================="
+      - " Web UI:  https://{{ vault_hostname }}"
+      - ""
+      - " ⚠️  MANUAL UNSEAL REQUIRED after every pod restart!"
+      - " Unseal keys saved to: openbao-init-keys.json"
+      - " KEEP THESE KEYS SECURE — store in a password manager!"
+      - ""
+      - " UNSEAL COMMANDS (provide 3 of the 5 keys):"
+      - "   kubectl exec -n {{ vault_namespace }} openbao-0 -- bao operator unseal KEY_1"
+      - "   kubectl exec -n {{ vault_namespace }} openbao-0 -- bao operator unseal KEY_2"
+      - "   kubectl exec -n {{ vault_namespace }} openbao-0 -- bao operator unseal KEY_3"
+      - ""
+      - " KUBERNETES AUTH SETUP (after unsealing):"
+      - "   export BAO_TOKEN=<root_token>"
+      - "   bao auth enable kubernetes"
+      - "   bao write auth/kubernetes/config \\"
+      - "     kubernetes_host=https://{{ k8s_api_server_ip }}:6443"
+      - ""
+      - " POD SECRET INJECTION (Vault-compatible annotations):"
+      - "   vault.hashicorp.com/agent-inject: 'true'"
+      - "   vault.hashicorp.com/role: 'my-app'"
+      - "   vault.hashicorp.com/agent-inject-secret-config: 'secret/data/my-app'"
+      - "======================================================="

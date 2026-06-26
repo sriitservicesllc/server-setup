@@ -1,0 +1,63 @@
+---
+# rclone CronJob: Syncs Velero backup bucket from MinIO → OneDrive
+# Runs on schedule defined by velero_onedrive_sync_schedule
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: velero-onedrive-sync
+  namespace: {{ velero_namespace }}
+  labels:
+    app: velero-onedrive-sync
+spec:
+  schedule: "{{ velero_onedrive_sync_schedule }}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: velero-onedrive-sync
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: rclone-sync
+              image: rclone/rclone:latest
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  echo "=== Starting MinIO → OneDrive sync $(date) ==="
+                  rclone sync \
+                    minio:{{ velero_s3_bucket }} \
+                    onedrive:{{ velero_onedrive_folder }} \
+                    --config=/config/rclone.conf \
+                    --progress \
+                    --stats=60s \
+                    --transfers=4 \
+                    --checkers=8 \
+                    --log-level=INFO \
+                    --retries=3 \
+                    --retries-sleep=10s \
+                    --low-level-retries=10
+                  echo "=== Sync completed $(date) ==="
+              resources:
+                requests:
+                  memory: 128Mi
+                  cpu: 100m
+                limits:
+                  memory: 512Mi
+                  cpu: 500m
+              volumeMounts:
+                - name: rclone-config
+                  mountPath: /config
+                  readOnly: true
+          volumes:
+            - name: rclone-config
+              secret:
+                secretName: rclone-onedrive-config
+                items:
+                  - key: rclone.conf
+                    path: rclone.conf

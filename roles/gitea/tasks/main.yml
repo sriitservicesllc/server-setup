@@ -1,0 +1,212 @@
+---
+# =============================================================================
+# Role: gitea — Self-hosted Git service with email-based authentication
+# Provides: Git hosting, issues, PR reviews, project boards, CI webhooks
+# Auth: Local accounts + email (no external SSO required)
+# =============================================================================
+
+- name: Create devops namespace
+  ansible.builtin.command: kubectl create namespace {{ gitea_namespace }}
+  ignore_errors: true
+  changed_when: true
+
+- name: Create Gitea database user in PostgreSQL
+  ansible.builtin.shell: |
+    kubectl exec -n databases postgresql-0 -c postgresql -- bash -lc '
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 <<SQL
+    DO \$\$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT FROM pg_catalog.pg_roles WHERE rolname = '\''gitea'\''
+      ) THEN
+        CREATE USER gitea WITH ENCRYPTED PASSWORD '\''{{ gitea_db_password }}'\'';
+      END IF;
+    END
+    \$\$;
+    SQL
+    '
+  changed_when: false
+
+- name: Create Gitea database in PostgreSQL
+  ansible.builtin.shell: |
+    kubectl exec -n databases postgresql-0 -c postgresql -- bash -lc '
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\''gitea'\''" | grep -q 1 ||
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE gitea OWNER gitea;"
+    '
+  changed_when: false
+
+- name: Add Gitea Helm repository
+  kubernetes.core.helm_repository:
+    name: gitea-charts
+    repo_url: https://dl.gitea.io/charts/
+
+- name: Install Gitea via Helm
+  kubernetes.core.helm:
+    name: gitea
+    chart_ref: gitea-charts/gitea
+    chart_version: "{{ gitea_version }}"
+    release_namespace: "{{ gitea_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "10m"
+    values:
+      gitea:
+        admin:
+          username: "{{ gitea_admin_user }}"
+          password: "{{ gitea_admin_password }}"
+          email: "{{ gitea_admin_email }}"
+        config:
+          APP_NAME: "SRIIT Git"
+          server:
+            DOMAIN: "{{ gitea_hostname }}"
+            ROOT_URL: "https://{{ gitea_hostname }}"
+            SSH_DOMAIN: "{{ gitea_hostname }}"
+            SSH_PORT: 22
+            DISABLE_SSH: false
+            LFS_START_SERVER: true
+          database:
+            DB_TYPE: postgres
+            HOST: postgresql.databases.svc.cluster.local:5432
+            NAME: gitea
+            USER: gitea
+            PASSWD: "{{ gitea_db_password }}"
+          cache:
+            ADAPTER: memory
+          session:
+            PROVIDER: memory
+          queue:
+            TYPE: level
+          repository:
+            DEFAULT_BRANCH: main
+            DEFAULT_PRIVATE: true
+          # ── Gitea Actions (CI/CD built-in) ───────────────────────────────────
+          actions:
+            ENABLED: true
+          # ── Cron Jobs ────────────────────────────────────────────────────────
+          cron:
+            ENABLED: true
+            RUN_AT_START: false
+          "cron.cleanup_hook_task_table":
+            ENABLED: true
+            SCHEDULE: "@midnight"
+          "cron.cleanup_packages":
+            ENABLED: true
+            SCHEDULE: "@midnight"
+          # ── Email / Registration (simple email-based auth) ──────────────────
+          service:
+            REGISTER_EMAIL_CONFIRM: "{{ 'true' if gitea_smtp_enabled else 'false' }}"
+            DISABLE_REGISTRATION: "{{ 'false' if gitea_allow_registration else 'true' }}"
+            REQUIRE_SIGNIN_VIEW: "{{ 'true' if gitea_require_signin else 'false' }}"
+            DEFAULT_KEEP_EMAIL_PRIVATE: true
+            ALLOW_ONLY_EXTERNAL_REGISTRATION: false
+            ENABLE_NOTIFY_MAIL: "{{ 'true' if gitea_smtp_enabled else 'false' }}"
+          # ── SMTP (optional — set gitea_smtp_enabled: true in all.yml) ───────
+          mailer:
+            ENABLED: "{{ gitea_smtp_enabled | bool }}"
+            SMTP_ADDR: "{{ gitea_smtp_host }}"
+            SMTP_PORT: "{{ gitea_smtp_port }}"
+            FROM: "{{ gitea_smtp_from }}"
+            USER: "{{ gitea_smtp_user }}"
+            PASSWD: "{{ gitea_smtp_password }}"
+            PROTOCOL: smtp+starttls
+          log:
+            LEVEL: Info
+          # ── Security ─────────────────────────────────────────────────────────
+          security:
+            INSTALL_LOCK: true
+            SECRET_KEY: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=64') }}"
+            INTERNAL_TOKEN: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=64') }}"
+          # ── No external OAuth — disabled ─────────────────────────────────────
+          oauth2:
+            ENABLE: false
+        metrics:
+          enabled: true
+          serviceMonitor:
+            enabled: true
+            namespace: monitoring
+
+      # ── Bundled PostgreSQL (Disabled — using shared database) ────────────────
+      postgresql-ha:
+        enabled: false
+      postgresql:
+        enabled: false
+
+      # ── Persistent storage for repositories ────────────────────────────────
+      persistence:
+        enabled: true
+        storageClass: "{{ gitea_storage_class }}"
+        size: "{{ gitea_storage_size }}"
+        accessModes:
+          - ReadWriteOnce
+
+      # ── HTTPS Ingress ──────────────────────────────────────────────────────
+      ingress:
+        enabled: true
+        className: nginx
+        annotations:
+          cert-manager.io/cluster-issuer: selfsigned-issuer
+          nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          nginx.ingress.kubernetes.io/proxy-body-size: "0"
+          nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+        hosts:
+          - host: "{{ gitea_hostname }}"
+            paths:
+              - path: /
+                pathType: Prefix
+        tls:
+          - secretName: gitea-tls
+            hosts:
+              - "{{ gitea_hostname }}"
+
+      # ── SSH as LoadBalancer (git push/pull over SSH) ────────────────────────
+      service:
+        ssh:
+          type: LoadBalancer
+          port: 22
+
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 200m
+        limits:
+          memory: 1Gi
+          cpu: 1000m
+
+- name: Wait for Gitea pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ gitea_namespace }} -l app.kubernetes.io/name=gitea
+    --no-headers | grep -v Running | grep -v Completed | wc -l
+  register: gitea_pods
+  until: gitea_pods.stdout | int == 0
+  retries: 40
+  delay: 15
+  changed_when: false
+
+- name: Get Gitea SSH LoadBalancer IP
+  ansible.builtin.shell: >
+    kubectl get svc -n {{ gitea_namespace }} gitea-ssh
+    -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+  register: gitea_ssh_ip
+  changed_when: false
+  ignore_errors: true
+
+- name: Display Gitea access info
+  ansible.builtin.debug:
+    msg:
+      - "======================================================="
+      - " Gitea Git Service"
+      - "======================================================="
+      - " Web UI:    https://{{ gitea_hostname }}"
+      - " SSH clone: git@{{ gitea_ssh_ip.stdout | default('SSH_LB_IP') }}:22"
+      - " Admin:     {{ gitea_admin_user }} / {{ gitea_admin_password }}"
+      - "-------------------------------------------------------"
+      - " Auth mode: Email-based (local accounts)"
+      - " Registration: {{ 'OPEN' if gitea_allow_registration else 'ADMIN ONLY' }}"
+      - " Email confirm: {{ 'YES (SMTP configured)' if gitea_smtp_enabled else 'NO (disabled)' }}"
+      - "-------------------------------------------------------"
+      - " NEXT: Create an OAuth2 app for Woodpecker CI:"
+      - "   Gitea Admin → Site Admin → Applications"
+      - "   Name: Woodpecker CI"
+      - "   Redirect: https://{{ woodpecker_hostname }}/authorize"
+      - "   → Copy Client ID + Secret → set in vault.yml"
+      - "======================================================="

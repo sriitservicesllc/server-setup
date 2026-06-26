@@ -1,0 +1,166 @@
+---
+# =============================================================================
+# Role: databases — Deploy PostgreSQL, MySQL, and Redis via Helm (Bitnami)
+# =============================================================================
+
+# ── Namespace ────────────────────────────────────────────────────────────────
+- name: Create databases namespace
+  ansible.builtin.command: kubectl create namespace {{ postgresql_namespace }}
+  ignore_errors: true
+  changed_when: true
+
+# ── PostgreSQL ───────────────────────────────────────────────────────────────
+- name: Install PostgreSQL with replication
+  kubernetes.core.helm:
+    name: postgresql
+    chart_ref: bitnami/postgresql
+    chart_version: "{{ postgresql_version }}"
+    release_namespace: "{{ postgresql_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "10m"
+    values:
+      auth:
+        postgresPassword: "{{ postgresql_password }}"
+        database: appdb
+        enablePostgresUser: true
+      primary:
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 250m
+          limits:
+            memory: 1Gi
+            cpu: 1000m
+        persistence:
+          enabled: true
+          storageClass: "{{ postgresql_storage_class }}"
+          size: "{{ postgresql_storage_size }}"
+        initdb:
+          scripts:
+            init.sql: |
+              CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+              CREATE EXTENSION IF NOT EXISTS uuid-ossp;
+      replication:
+        enabled: "{{ postgresql_replication_enabled | bool }}"
+        numSynchronousReplicas: 1
+      readReplicas:
+        replicaCount: "{{ postgresql_read_replicas }}"
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 250m
+          limits:
+            memory: 1Gi
+            cpu: 1000m
+        persistence:
+          enabled: true
+          storageClass: "{{ postgresql_storage_class }}"
+          size: "{{ postgresql_storage_size }}"
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+          namespace: monitoring
+  when: postgresql_enabled | bool
+
+# ── MySQL ────────────────────────────────────────────────────────────────────
+- name: Install MySQL
+  kubernetes.core.helm:
+    name: mysql
+    chart_ref: bitnami/mysql
+    chart_version: "{{ mysql_version }}"
+    release_namespace: "{{ mysql_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "10m"
+    values:
+      auth:
+        rootPassword: "{{ mysql_root_password }}"
+        database: appdb
+        createDatabase: true
+      primary:
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 250m
+          limits:
+            memory: 1Gi
+            cpu: 1000m
+        persistence:
+          enabled: true
+          storageClass: "{{ mysql_storage_class }}"
+          size: "{{ mysql_storage_size }}"
+      secondary:
+        replicaCount: 1
+        persistence:
+          enabled: true
+          storageClass: "{{ mysql_storage_class }}"
+          size: "{{ mysql_storage_size }}"
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+          namespace: monitoring
+  when: mysql_enabled | bool
+
+# ── Redis ────────────────────────────────────────────────────────────────────
+- name: Install Redis (Sentinel HA mode)
+  kubernetes.core.helm:
+    name: redis
+    chart_ref: bitnami/redis
+    chart_version: "{{ redis_version }}"
+    release_namespace: "{{ redis_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "10m"
+    values:
+      architecture: replication
+      auth:
+        enabled: true
+        password: "{{ redis_password }}"
+      master:
+        resources:
+          requests:
+            memory: 128Mi
+            cpu: 100m
+          limits:
+            memory: 512Mi
+            cpu: 500m
+        persistence:
+          enabled: true
+          storageClass: "{{ redis_storage_class }}"
+          size: "{{ redis_storage_size }}"
+      replica:
+        replicaCount: 2
+        persistence:
+          enabled: true
+          storageClass: "{{ redis_storage_class }}"
+          size: "{{ redis_storage_size }}"
+      sentinel:
+        enabled: true
+        masterSet: mymaster
+        quorum: 2
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+          namespace: monitoring
+  when: redis_enabled | bool
+
+- name: Wait for database pods to be ready
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ postgresql_namespace }} --no-headers
+    | grep -v Running | grep -v Completed | wc -l
+  register: db_pods
+  until: db_pods.stdout | int == 0
+  retries: 40
+  delay: 15
+  changed_when: false
+
+- name: Display database connection info
+  ansible.builtin.debug:
+    msg:
+      - "PostgreSQL: postgresql.{{ postgresql_namespace }}.svc.cluster.local:5432"
+      - "MySQL: mysql.{{ mysql_namespace }}.svc.cluster.local:3306"
+      - "Redis: redis-master.{{ redis_namespace }}.svc.cluster.local:6379"

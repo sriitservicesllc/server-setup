@@ -1,0 +1,258 @@
+---
+# =============================================================================
+# Role: kong — Kong Gateway OSS (Apache 2.0)
+# Image: kong:3.x (official DockerHub OSS image, no license required)
+# Helm chart: kong/kong (https://charts.konghq.com)
+#
+# Kong Gateway OSS includes (since v3.4+):
+#   ✓ Kong Manager OSS (visual UI — no license key needed)
+#   ✓ Admin REST API
+#   ✓ Proxy (HTTP + HTTPS)
+#   ✓ All bundled OSS plugins (rate-limiting, jwt, cors, etc.)
+#   ✗ RBAC / multi-workspace  ← Enterprise only (not needed here)
+#   ✗ Kong Vitals analytics   ← Enterprise only
+#   ✗ Developer Portal        ← Enterprise only
+#
+# Architecture:
+#   Internet → MetalLB → NGINX Ingress → Kong Proxy → App Services
+#                                      ↘ Kong Manager OSS (admin UI)
+# =============================================================================
+
+- name: Create Kong namespace
+  ansible.builtin.command: kubectl create namespace {{ kong_namespace }}
+  ignore_errors: true
+  changed_when: true
+
+- name: Add Kong Helm repository
+  kubernetes.core.helm_repository:
+    name: kong
+    repo_url: https://charts.konghq.com
+
+- name: Update Helm repos
+  ansible.builtin.command: helm repo update kong
+  changed_when: false
+
+
+- name: Create Kong database user in PostgreSQL
+  ansible.builtin.shell: |
+    kubectl exec -n databases postgresql-0 -c postgresql -- bash -lc '
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 <<SQL
+    DO \$\$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT FROM pg_catalog.pg_roles WHERE rolname = '\''kong'\''
+      ) THEN
+        CREATE USER kong WITH ENCRYPTED PASSWORD '\''{{ kong_db_password }}'\'';
+      END IF;
+    END
+    \$\$;
+    SQL
+    '
+  changed_when: false
+
+- name: Create Kong database in PostgreSQL
+  ansible.builtin.shell: |
+    kubectl exec -n databases postgresql-0 -c postgresql -- bash -lc '
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\''kong'\''" | grep -q 1 ||
+      PGPASSWORD="{{ postgresql_password }}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE kong OWNER kong;"
+    '
+  changed_when: false
+  
+- name: Adopt existing Kong CRDs into Helm release
+  ansible.builtin.shell: |
+    for crd in $(kubectl get crd -o name | grep konghq.com); do
+      kubectl label $crd app.kubernetes.io/managed-by=Helm --overwrite
+      kubectl annotate $crd meta.helm.sh/release-name=kong --overwrite
+      kubectl annotate $crd meta.helm.sh/release-namespace={{ kong_namespace }} --overwrite
+    done
+  changed_when: false
+  
+# ── Install Kong Gateway OSS ─────────────────────────────────────────────────
+- name: Install Kong Gateway OSS via Helm
+  kubernetes.core.helm:
+    name: kong
+    chart_ref: kong/kong
+    chart_version: "{{ kong_version }}"
+    release_namespace: "{{ kong_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "15m"
+    values:
+      # ── OSS image — no enterprise license key or secret needed ─────────────
+      image:
+        repository: kong              # DockerHub official OSS image
+        tag: "3.7"                    # Pinned OSS release (Apache 2.0)
+        pullPolicy: IfNotPresent
+      # Enterprise flag MUST be disabled for OSS
+      enterprise:
+        enabled: false                # ← ensures no enterprise features activate
+      
+      ingressController:
+        enabled: true
+        installCRDs: false
+
+      # ── Database mode: traditional (full plugin + config support) ──────────
+      env:
+        database: postgres
+        pg_host: postgresql.databases.svc.cluster.local
+        pg_port: "5432"
+        pg_database: kong
+        pg_user: kong
+        pg_password: "{{ kong_db_password }}"
+        # Enable bundled OSS plugins
+        plugins: "{{ kong_plugins | join(',') }}"
+        # Proxy listens
+        proxy_listen: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+        # Admin API listen (used by Kong Manager OSS)
+        admin_listen: "0.0.0.0:8001"
+        # Kong Manager OSS UI (available since Kong 3.4, no license required)
+        admin_gui_listen: "0.0.0.0:8002"
+        admin_gui_url: "https://{{ kong_manager_hostname }}"
+        admin_api_uri: "http://kong-kong-admin.{{ kong_namespace }}.svc.cluster.local:8001"
+        # Logging
+        log_level: notice
+        # Trust NGINX Ingress forwarded headers
+        trusted_ips: "0.0.0.0/0,::0/0"
+        real_ip_header: "X-Forwarded-For"
+
+      # ── DB migrations (runs as init job before Kong starts) ────────────────
+      migrations:
+        preUpgrade: true
+        postUpgrade: true
+
+      # ── Proxy service — public API entrypoint ──────────────────────────────
+      proxy:
+        enabled: true
+        type: ClusterIP
+        http:
+          enabled: true
+          servicePort: 80
+          containerPort: 8000
+        tls:
+          enabled: true
+          servicePort: 443
+          containerPort: 8443
+        ingress:
+          enabled: true
+          ingressClassName: nginx
+          hostname: "{{ kong_proxy_hostname }}"
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-issuer
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+            nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+            nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+          tls: "{{ kong_proxy_hostname }}-tls"
+
+      # ── Admin API — internal only (whitelist to office CIDR) ───────────────
+      admin:
+        enabled: true
+        type: ClusterIP
+        http:
+          enabled: true
+          servicePort: 8001
+          containerPort: 8001
+        tls:
+          enabled: false
+        ingress:
+          enabled: true
+          ingressClassName: nginx
+          hostname: "{{ kong_admin_api_hostname }}"
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-issuer
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/whitelist-source-range: "192.168.0.0/16,10.0.0.0/8"
+          tls: "{{ kong_admin_api_hostname }}-tls"
+
+      # ── Kong Manager OSS — visual admin UI (no license required since 3.4) ─
+      manager:
+        enabled: true
+        type: ClusterIP
+        http:
+          enabled: true
+          servicePort: 8002
+          containerPort: 8002
+        tls:
+          enabled: false
+        ingress:
+          enabled: true
+          ingressClassName: nginx
+          hostname: "{{ kong_manager_hostname }}"
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-issuer
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/whitelist-source-range: "192.168.0.0/16,10.0.0.0/8"
+          tls: "{{ kong_manager_hostname }}-tls"
+
+      # ── Horizontal Pod Autoscaling ─────────────────────────────────────────
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 10
+        targetCPUUtilizationPercentage: 75
+
+      # ── Resources ──────────────────────────────────────────────────────────
+      resources:
+        requests:
+          memory: 512Mi
+          cpu: 500m
+        limits:
+          memory: 2Gi
+          cpu: 2000m
+
+      # ── Prometheus metrics (via /metrics endpoint, port 8100) ──────────────
+      serviceMonitor:
+        enabled: true
+        namespace: monitoring
+        labels:
+          release: kube-prometheus-stack
+
+      # ── Pod disruption budget ──────────────────────────────────────────────
+      podDisruptionBudget:
+        enabled: true
+        maxUnavailable: "50%"
+
+
+
+# ── Wait for Kong to be ready ─────────────────────────────────────────────────
+- name: Wait for Kong proxy pods to be running
+  ansible.builtin.shell: >
+    kubectl get pods -n {{ kong_namespace }} -l app=kong-kong
+    --no-headers | grep Running | wc -l
+  register: kong_proxy_ready
+  until: kong_proxy_ready.stdout | int >= 1
+  retries: 40
+  delay: 15
+  changed_when: false
+
+
+- name: Render Kong global plugin manifest
+  ansible.builtin.template:
+    src: kong-global-plugins.yaml.j2
+    dest: /tmp/kong-global-plugins.yaml
+    mode: "0644"
+
+- name: Apply Kong global plugins
+  ansible.builtin.command: kubectl apply -f /tmp/kong-global-plugins.yaml
+  changed_when: true
+
+# ── Health check ──────────────────────────────────────────────────────────────
+- name: Verify Kong Gateway is healthy
+  ansible.builtin.shell: |
+    POD=$(kubectl get pod -n {{ kong_namespace }} \
+      -l app.kubernetes.io/instance=kong,app.kubernetes.io/name=kong \
+      -o jsonpath='{.items[0].metadata.name}')
+    kubectl exec -n {{ kong_namespace }} "$POD" -c proxy -- kong health
+  changed_when: false
+  
+- name: Display Kong status
+  ansible.builtin.debug:
+    msg:
+      - "======================================================="
+      - "Kong Gateway OSS deployed successfully"
+      - "Namespace: {{ kong_namespace }}"
+      - "Admin API: https://kong-admin.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      - "Manager UI: https://kong-manager.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      - "Proxy: https://kong.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      - "Active OSS plugins: {{ kong_plugins | join(', ') }}"
+      - "======================================================="
