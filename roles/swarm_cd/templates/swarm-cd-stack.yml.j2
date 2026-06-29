@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  swarm-cd:
+    image: "{{ swarm_cd_image }}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - "{{ swarm_cd_root }}/config/repos.yaml:/app/repos.yaml:ro"
+      - "{{ swarm_cd_root }}/config/stacks.yaml:/app/stacks.yaml:ro"
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+    ports:
+      - "8080:8080"

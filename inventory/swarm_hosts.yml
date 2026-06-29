@@ -1,0 +1,37 @@
+---
+# =============================================================================
+# Docker Swarm Inventory
+# =============================================================================
+# Separate from the Kubernetes inventory so the two deployment modes do not
+# share bootstrap assumptions.
+
+all:
+  vars:
+    ansible_user: ansible
+    ansible_ssh_private_key_file: ~/.ssh/swarm_cluster_key
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    ansible_python_interpreter: /usr/bin/python3
+
+  children:
+    swarm_managers:
+      hosts:
+        swarm-manager-01:
+          ansible_host: 192.168.1.110
+          node_role: manager
+
+    swarm_workers:
+      hosts:
+        swarm-worker-01:
+          ansible_host: 192.168.1.111
+          node_role: worker
+        swarm-worker-02:
+          ansible_host: 192.168.1.112
+          node_role: worker
+        swarm-worker-03:
+          ansible_host: 192.168.1.113
+          node_role: worker
+
+    swarm_cluster:
+      children:
+        swarm_managers: {}
+        swarm_workers: {}

@@ -1,0 +1,90 @@
+---
+# =============================================================================
+# Role: swarm_platform - Render and deploy Swarm service stacks
+# =============================================================================
+
+- name: Create Swarm stack render root
+  ansible.builtin.file:
+    path: "{{ swarm_stack_render_root }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure overlay network exists
+  ansible.builtin.command: docker network create --driver overlay --attachable {{ swarm_overlay_network }}
+  register: overlay_network_create
+  failed_when: false
+  changed_when: overlay_network_create.rc == 0
+
+- name: Create shared swarm data root
+  ansible.builtin.file:
+    path: "{{ swarm_data_root }}"
+    state: directory
+    mode: "0755"
+
+- name: Create service-specific config directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ swarm_data_root }}/kong"
+    - "{{ swarm_data_root }}/promtail"
+    - "{{ swarm_data_root }}/prometheus"
+    - "{{ swarm_data_root }}/trivy"
+
+- name: Render Kong declarative config
+  ansible.builtin.copy:
+    dest: "{{ swarm_data_root }}/kong/kong.yml"
+    mode: "0644"
+    content: |
+      _format_version: "3.0"
+      services: []
+      routes: []
+      plugins: []
+
+- name: Render Promtail config
+  ansible.builtin.copy:
+    dest: "{{ swarm_data_root }}/promtail/config.yml"
+    mode: "0644"
+    content: |
+      server:
+        http_listen_port: 9080
+        grpc_listen_port: 0
+      positions:
+        filename: /tmp/positions.yaml
+      clients:
+        - url: http://loki:3100/loki/api/v1/push
+      scrape_configs:
+        - job_name: docker
+          docker_sd_configs:
+            - host: unix:///var/run/docker.sock
+              refresh_interval: 5s
+          relabel_configs:
+            - source_labels: ['__meta_docker_container_name']
+              target_label: container
+            - source_labels: ['__meta_docker_container_log_stream']
+              target_label: stream
+
+- name: Render Prometheus config
+  ansible.builtin.copy:
+    dest: "{{ swarm_data_root }}/prometheus/prometheus.yml"
+    mode: "0644"
+    content: |
+      global:
+        scrape_interval: 30s
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets: ['localhost:9090']
+
+- name: Render stack compose files
+  ansible.builtin.template:
+    src: "stacks/{{ item.template }}"
+    dest: "{{ swarm_stack_render_root }}/{{ item.stack_name }}.yml"
+    mode: "0644"
+  loop: "{{ swarm_profile_stacks }}"
+
+- name: Deploy stack files
+  ansible.builtin.command: "docker stack deploy --compose-file {{ swarm_stack_render_root }}/{{ item.stack_name }}.yml {{ item.stack_name }}"
+  loop: "{{ swarm_profile_stacks }}"
+  changed_when: true

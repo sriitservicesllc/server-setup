@@ -1,0 +1,62 @@
+---
+# =============================================================================
+# MAIN SITE PLAYBOOK - Docker Swarm Platform Deployment
+# =============================================================================
+
+- name: "01 · Preflight Checks"
+  hosts: swarm_cluster
+  become: true
+  gather_facts: true
+  roles:
+    - role: swarm_preflight
+      tags: [preflight, always]
+
+- name: "02 · Common Node Preparation"
+  hosts: swarm_cluster
+  become: true
+  roles:
+    - role: swarm_common
+      tags: [common, bootstrap]
+
+- name: "03 · Docker Engine"
+  hosts: swarm_cluster
+  become: true
+  roles:
+    - role: docker_engine
+      tags: [docker, bootstrap]
+
+- name: "04 · Docker Swarm Bootstrap"
+  hosts: swarm_managers
+  become: true
+  roles:
+    - role: docker_swarm
+      tags: [swarm, bootstrap]
+
+- name: "05 · Docker Swarm Worker Join"
+  hosts: swarm_workers
+  become: true
+  roles:
+    - role: docker_swarm
+      tags: [swarm, bootstrap]
+
+- name: "06 · SwarmCD Bootstrap"
+  hosts: swarm_managers
+  become: true
+  roles:
+    - role: swarm_cd
+      tags: [swarm_cd, cd, gitops]
+      when: swarm_cd_enabled | bool
+
+- name: "07 · Platform Stack Deployment"
+  hosts: swarm_managers
+  become: true
+  roles:
+    - role: swarm_platform
+      tags: [swarm, stacks, platform]
+
+- name: "08 · Post-Install Validation"
+  hosts: swarm_managers
+  become: true
+  roles:
+    - role: swarm_validate
+      tags: [validate, always]

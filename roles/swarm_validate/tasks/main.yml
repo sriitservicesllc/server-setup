@@ -1,0 +1,22 @@
+---
+# =============================================================================
+# Role: swarm_validate - Basic Swarm post-install checks
+# =============================================================================
+
+- name: Show Docker Swarm status
+  ansible.builtin.command: docker info
+  register: swarm_info
+  changed_when: false
+
+- name: Show deployed stacks
+  ansible.builtin.command: docker stack ls
+  register: stack_list
+  changed_when: false
+
+- name: Print Swarm deployment summary
+  ansible.builtin.debug:
+    msg:
+      - "Docker Swarm is configured on {{ groups['swarm_managers'][0] }}"
+      - "{{ swarm_longhorn_note }}"
+      - "Stacks deployed:"
+      - "{{ stack_list.stdout_lines | default([]) }}"

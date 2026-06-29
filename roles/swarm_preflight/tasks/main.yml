@@ -1,0 +1,68 @@
+---
+# =============================================================================
+# Role: swarm_preflight - Pre-flight checks for Docker Swarm nodes
+# =============================================================================
+
+- name: Check minimum RAM (4GB)
+  ansible.builtin.assert:
+    that: ansible_memtotal_mb >= 3800
+    fail_msg: "Node {{ inventory_hostname }} has only {{ ansible_memtotal_mb }}MB RAM. Minimum 4GB required."
+    success_msg: "RAM check passed: {{ ansible_memtotal_mb }}MB"
+  tags: preflight
+
+- name: Check minimum CPU cores (2)
+  ansible.builtin.assert:
+    that: ansible_processor_vcpus >= 2
+    fail_msg: "Node {{ inventory_hostname }} has only {{ ansible_processor_vcpus }} CPUs. Minimum 2 required."
+    success_msg: "CPU check passed: {{ ansible_processor_vcpus }} vCPUs"
+  tags: preflight
+
+- name: Check OS is Ubuntu 22.04+
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == "Ubuntu"
+      - ansible_distribution_major_version | int >= 22
+    fail_msg: "Unsupported OS: {{ ansible_distribution }} {{ ansible_distribution_version }}. Ubuntu 22.04+ required."
+  tags: preflight
+
+- name: Check total disk size on / for manager nodes (minimum 30GB)
+  ansible.builtin.assert:
+    that: (ansible_mounts | selectattr('mount', 'equalto', '/') | list | first).size_total > 30000000000
+    fail_msg: "Insufficient total disk size on /. Minimum 30GB required for manager nodes."
+  when: node_role == "manager"
+  tags: preflight
+
+- name: Check total disk size on / for worker nodes (minimum 50GB)
+  ansible.builtin.assert:
+    that: (ansible_mounts | selectattr('mount', 'equalto', '/') | list | first).size_total > 50000000000
+    fail_msg: "Insufficient total disk size on /. Minimum 50GB required for worker nodes."
+  when: node_role == "worker"
+  tags: preflight
+
+- name: Ensure hostname is set correctly
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+  tags: preflight
+
+- name: Update /etc/hosts with all swarm nodes
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    block: |
+      {% for host in groups['swarm_cluster'] %}
+      {{ hostvars[host].ansible_host }} {{ host }}
+      {% endfor %}
+    marker: "# {mark} ANSIBLE SWARM CLUSTER NODES"
+  tags: preflight
+
+- name: Disable UFW firewall
+  ansible.builtin.service:
+    name: ufw
+    state: stopped
+    enabled: false
+  ignore_errors: true
+  tags: preflight
+
+- name: Verify network connectivity between nodes
+  ansible.builtin.command: "ping -c 2 {{ hostvars[groups['swarm_managers'][0]].ansible_host }}"
+  changed_when: false
+  tags: preflight

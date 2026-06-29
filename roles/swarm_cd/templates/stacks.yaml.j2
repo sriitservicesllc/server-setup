@@ -1,0 +1,6 @@
+{% for stack in swarm_profile_stacks %}
+{{ stack.stack_name }}:
+  repo: platform
+  branch: "{{ swarm_cd_repo_branch }}"
+  compose_file: "{{ stack.compose_file }}"
+{% endfor %}

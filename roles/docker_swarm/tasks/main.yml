@@ -1,0 +1,48 @@
+---
+# =============================================================================
+# Role: docker_swarm - Initialize and join Docker Swarm nodes
+# =============================================================================
+
+- name: Inspect current Docker Swarm state
+  ansible.builtin.command: docker info
+  register: docker_info
+  changed_when: false
+  failed_when: false
+
+- name: Initialize Swarm on first manager
+  ansible.builtin.command: docker swarm init --advertise-addr {{ ansible_host }}
+  when:
+    - inventory_hostname == groups['swarm_managers'][0]
+    - docker_info.stdout is not search('Swarm:\\s+active')
+
+- name: Read worker join token on manager
+  ansible.builtin.command: docker swarm join-token -q worker
+  register: swarm_worker_join_token_raw
+  changed_when: false
+  when: inventory_hostname == groups['swarm_managers'][0]
+
+- name: Expose worker join token to the playbook
+  ansible.builtin.set_fact:
+    swarm_worker_join_token: "{{ swarm_worker_join_token_raw.stdout }}"
+  when: inventory_hostname == groups['swarm_managers'][0]
+
+- name: Join worker to Swarm
+  ansible.builtin.command: >-
+    docker swarm join
+    --token {{ hostvars[groups['swarm_managers'][0]].swarm_worker_join_token }}
+    {{ hostvars[groups['swarm_managers'][0]].ansible_host }}:2377
+  when:
+    - node_role == "worker"
+    - docker_info.stdout is not search('Swarm:\\s+active')
+
+- name: Label Swarm nodes
+  ansible.builtin.command: >-
+    docker node update
+    {% for item in (node_labels | default({})) | dict2items %}
+    --label-add {{ item.key }}={{ item.value }}
+    {% endfor %}
+    {{ inventory_hostname }}
+  when:
+    - inventory_hostname == groups['swarm_managers'][0]
+    - (node_labels | default({})) | length > 0
+  changed_when: false

@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  gitea:
+    image: gitea/gitea:1.22
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__server__ROOT_URL: "https://git.sriitservices.local/"
+      GITEA__database__DB_TYPE: sqlite3
+    volumes:
+      - /srv/swarm/gitea:/data
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    networks:
+      - platform_net
+    deploy:
+      replicas: 1
+
+networks:
+  platform_net:
+    external: true
