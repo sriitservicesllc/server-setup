@@ -83,7 +83,7 @@
       
       jdbcOverwrite:
        enable: true
-       jdbcUrl: "jdbc:postgresql://postgresql.databases.svc.cluster.local:5432/sonarqube"
+       jdbcUrl: "jdbc:postgresql://postgresql.databases.svc.{{ cluster_domain }}:5432/sonarqube"
        jdbcUsername: "sonarqube"
        jdbcPassword: "{{ sonarqube_admin_password }}"
       # JVM settings

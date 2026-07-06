@@ -116,7 +116,7 @@
 
 - name: Verify MinIO API is reachable
   ansible.builtin.uri:
-    url: "http://minio.{{ minio_namespace }}.svc.cluster.local:9000/minio/health/live"
+    url: "http://minio.{{ minio_namespace }}.svc.{{ cluster_domain }}:9000/minio/health/live"
     return_content: false
     status_code: 200
   register: minio_health

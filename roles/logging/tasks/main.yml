@@ -133,7 +133,7 @@
           [OUTPUT]
               Name  es
               Match kube.*
-              Host  cluster-logs-es-http.{{ logging_namespace }}.svc.cluster.local
+              Host  cluster-logs-es-http.{{ logging_namespace }}.svc.{{ cluster_domain }}
               Port  9200
               Index fluent-bit
               HTTP_User elastic
@@ -163,4 +163,4 @@
   ansible.builtin.debug:
     msg:
       - "Kibana Ingress: https://kibana.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
-      - "Elasticsearch internal: https://cluster-logs-es-http.{{ logging_namespace }}.svc.cluster.local:9200"
+      - "Elasticsearch internal: https://cluster-logs-es-http.{{ logging_namespace }}.svc.{{ cluster_domain }}:9200"

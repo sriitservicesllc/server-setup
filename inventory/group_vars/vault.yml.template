@@ -60,3 +60,10 @@ infisical_jwt_secret: "7d2a0d9c4b6e5f1a8c3d7e9f2b4c6d8e1f3a5b7c9d0e2f4a6b8c1d3e5
 velero_onedrive_client_id: ""     # Leave blank for personal OneDrive
 velero_onedrive_client_secret: "" # Leave blank for personal OneDrive
 velero_onedrive_token: ""         # Full JSON token blob from rclone config
+
+# ── SSH Access (optional) ────────────────────────────────────────────────────
+# Leave blank if you use SSH keys plus passwordless sudo on the servers.
+# Fill these in and encrypt this file if you want Ansible to reuse passwords
+# instead of prompting every run.
+ansible_password: ""
+ansible_become_password: ""

@@ -12,12 +12,13 @@
     release_namespace: trivy-system
     create_namespace: true
     wait: true
-    wait_timeout: "5m"
+    wait_timeout: "15m"
     values:
       operator:
         scanJobTimeout: 5m
         concurrentScanJobsLimit: "10"
         scanJobTTL: 24h
+        builtInTrivyServer: true
         vulnerabilityScanner:
           enabled: true
           scanOnlyCurrentRevisions: false
@@ -37,8 +38,18 @@
         ignoreUnfixed: false
         severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
         timeout: 5m0s
-        dbRepository: ghcr.io/aquasecurity/trivy-db:2
-        javaDbRepository: ghcr.io/aquasecurity/trivy-java-db:1
+        dbRegistry: mirror.gcr.io
+        dbRepository: aquasec/trivy-db
+        javaDbRegistry: mirror.gcr.io
+        javaDbRepository: aquasec/trivy-java-db
+      nodeCollector:
+        tolerations:
+          - key: node-role.kubernetes.io/control-plane
+            operator: Exists
+            effect: NoSchedule
+          - key: node-role.kubernetes.io/master
+            operator: Exists
+            effect: NoSchedule
       resources:
         requests:
           cpu: 100m

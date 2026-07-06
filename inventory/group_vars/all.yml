@@ -43,6 +43,8 @@ storage_enabled: true
 longhorn_version: "1.12.0"
 longhorn_replica_count: 2         # number of data replicas across nodes
 longhorn_data_path: "/var/lib/longhorn"
+longhorn_storage_minimal_available_percentage: "5"   # keep a small free-space buffer per disk
+longhorn_storage_over_provisioning_percentage: "300"  # allow sparse-file scheduling headroom
 
 # ── Docker Registry (Harbor) ────────────────────────────────────────────────
 harbor_enabled: true
@@ -83,7 +85,8 @@ redis_password: "Redis@Cache1!"     # CHANGE — use vault in production
 
 rabbitmq_enabled: true
 rabbitmq_namespace: "databases"
-rabbitmq_version: "16.0.14"         # Bitnami RabbitMQ Helm chart
+rabbitmq_image_repository: "rabbitmq"
+rabbitmq_image_tag: "4.3.2-management"
 rabbitmq_storage_class: "longhorn"
 rabbitmq_storage_size: "5Gi"
 rabbitmq_username: "rabbitmq"
@@ -138,7 +141,7 @@ velero_namespace: "velero"
 velero_backup_storage_location: "minio-local"
 velero_s3_bucket: "velero-backups"
 velero_s3_region: "us-east-1"     # MinIO ignores this but requires a value
-velero_s3_endpoint: "http://minio.minio.svc.cluster.local:9000"
+velero_s3_endpoint: "http://minio.minio.svc.{{ cluster_name }}:9000"
 # OneDrive sync via rclone CronJob
 velero_onedrive_sync_enabled: true
 velero_onedrive_sync_schedule: "0 3 * * *"   # Daily at 3 AM
@@ -173,7 +176,7 @@ kong_plugins:
 # ── Gitea (Self-Hosted Git — Email-based Authentication) ─────────────────────
 gitea_enabled: true
 gitea_namespace: "devops"
-gitea_version: "12.6.0"            # Gitea Helm chart version (App v1.26+)
+gitea_image_tag: "1.26.4"          # Official Gitea container image tag
 gitea_hostname: "git.sriitservices.local"
 gitea_admin_user: "gitadmin"
 gitea_admin_password: "Gitea@Admin1!"  # CHANGE — use vault

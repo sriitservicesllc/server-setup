@@ -36,7 +36,7 @@
         enabled: true
         externalDriverType: postgres
         externalConnectionString: >-
-          postgres://mattermost:{{ mattermost_admin_password }}@postgresql.databases.svc.cluster.local:5432/mattermost?sslmode=disable
+          postgres://mattermost:{{ mattermost_admin_password }}@postgresql.databases.svc.{{ cluster_domain }}:5432/mattermost?sslmode=disable
       ingress:
         enabled: true
         className: nginx

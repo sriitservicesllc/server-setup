@@ -32,8 +32,8 @@
         defaultReplicaCount: "{{ longhorn_replica_count }}"
         defaultDataPath: "{{ longhorn_data_path }}"
         nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
-        storageMinimalAvailablePercentage: "10"
-        storageOverProvisioningPercentage: "100"
+        storageMinimalAvailablePercentage: "{{ longhorn_storage_minimal_available_percentage }}"
+        storageOverProvisioningPercentage: "{{ longhorn_storage_over_provisioning_percentage }}"
         backupCompressionMethod: lz4
         autoSalvage: true
         autoDeletePodWhenVolumeDetachedUnexpectedly: true

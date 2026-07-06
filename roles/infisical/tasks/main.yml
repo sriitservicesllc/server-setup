@@ -42,8 +42,8 @@
       --namespace {{ infisical_namespace | default('infisical') }} \
       --from-literal=AUTH_SECRET="{{ infisical_auth_secret }}" \
       --from-literal=ENCRYPTION_KEY="{{ infisical_encryption_key }}" \
-      --from-literal=DB_CONNECTION_URI="postgresql://infisical:{{ infisical_db_password }}@postgresql.databases.svc.cluster.local:5432/infisical" \
-      --from-literal=REDIS_URL="redis://redis-headless.databases.svc.cluster.local:6379" \
+      --from-literal=DB_CONNECTION_URI="postgresql://infisical:{{ infisical_db_password }}@postgresql.databases.svc.{{ cluster_domain }}:5432/infisical" \
+      --from-literal=REDIS_URL="redis://redis-headless.databases.svc.{{ cluster_domain }}:6379" \ 
       --from-literal=SITE_URL="https://{{ infisical_hostname }}" \
       --dry-run=client -o yaml | kubectl apply -f -
   changed_when: false

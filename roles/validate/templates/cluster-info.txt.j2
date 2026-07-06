@@ -24,10 +24,10 @@ ACCESS URLS:
   Longhorn:          https://longhorn.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}
 
 DATABASE ENDPOINTS (cluster-internal):
-  PostgreSQL:  postgresql.{{ postgresql_namespace }}.svc.cluster.local:5432
-  MySQL:       mysql.{{ mysql_namespace }}.svc.cluster.local:3306
-  Redis:       redis-master.{{ redis_namespace }}.svc.cluster.local:6379
-  RabbitMQ:    rabbitmq.{{ rabbitmq_namespace }}.svc.cluster.local:5672
+  PostgreSQL:  postgresql.{{ postgresql_namespace }}.svc.{{ cluster_domain }}:5432
+  MySQL:       mysql.{{ mysql_namespace }}.svc.{{ cluster_domain }}:3306
+  Redis:       redis-master.{{ redis_namespace }}.svc.{{ cluster_domain }}:6379
+  RabbitMQ:    rabbitmq.{{ rabbitmq_namespace }}.svc.{{ cluster_domain }}:5672
 
 KUBECONFIG:
   File: kubeconfig/admin.conf

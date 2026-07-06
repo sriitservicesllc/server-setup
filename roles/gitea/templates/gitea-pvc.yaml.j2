@@ -1,0 +1,15 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitea-data
+  namespace: {{ gitea_namespace }}
+  labels:
+    app.kubernetes.io/name: gitea
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: "{{ gitea_storage_class }}"
+  resources:
+    requests:
+      storage: "{{ gitea_storage_size }}"

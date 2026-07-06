@@ -94,7 +94,7 @@
       # ── Database mode: traditional (full plugin + config support) ──────────
       env:
         database: postgres
-        pg_host: postgresql.databases.svc.cluster.local
+        pg_host: postgresql.databases.svc.{{ cluster_domain }}
         pg_port: "5432"
         pg_database: kong
         pg_user: kong
@@ -108,7 +108,7 @@
         # Kong Manager OSS UI (available since Kong 3.4, no license required)
         admin_gui_listen: "0.0.0.0:8002"
         admin_gui_url: "https://{{ kong_manager_hostname }}"
-        admin_api_uri: "http://kong-kong-admin.{{ kong_namespace }}.svc.cluster.local:8001"
+        admin_api_uri: "http://kong-kong-admin.{{ kong_namespace }}.svc.{{ cluster_domain }}:8001"
         # Logging
         log_level: notice
         # Trust NGINX Ingress forwarded headers

@@ -30,7 +30,7 @@ Every component in this stack is verified open source. No enterprise licenses, n
 | **PostgreSQL** | PostgreSQL License | |
 | **MySQL** | GPL-2.0 | |
 | **Redis** | BSD-3-Clause (≤7.2) | Bitnami chart uses Redis 7.x |
-| **RabbitMQ** | MPL-2.0 | Bitnami chart |
+| **RabbitMQ** | MPL-2.0 | Direct StatefulSet with the official RabbitMQ image |
 | **Elasticsearch** | ELv2 | Free self-hosted; not Apache but free-to-use |
 | **Kibana** | ELv2 | Same as above |
 | **Fluent Bit** | Apache 2.0 | |
@@ -175,7 +175,7 @@ Every component in this stack is verified open source. No enterprise licenses, n
 
 | Step | Component | URL | Auth | Notes |
 |------|-----------|-----|------|-------|
-| 17 | **Gitea** | `git.sriitservices.local` | **Email-based** | Git, Issues, PRs, Projects, SSH clone |
+| 17 | **Gitea** | `git.sriitservices.local` | **Email-based** | Git, Issues, PRs, Projects, SSH clone; direct container deployment |
 | 18 | **Woodpecker CI** | `ci.sriitservices.local` | Gitea OAuth2 | Container-native pipelines, K8s agent backend |
 | 19 | **ArgoCD** | `argocd.sriitservices.local` | Local admin | GitOps CD, AppProjects for prod/staging |
 | 20 | **SonarQube** | `sonar.sriitservices.local` | Local admin | Code quality, security hotspots, coverage |
@@ -306,6 +306,9 @@ ansible-vault encrypt inventory/group_vars/vault.yml
 # Generate a dedicated cluster key
 ssh-keygen -t ed25519 -f ~/.ssh/k8s_cluster_key -C "k8s-ansible"
 
+# Prerequisite: the `ansible` user must already exist on each server
+# (or update `inventory/hosts.yml` to match a pre-existing sudo-capable user)
+
 # Copy to all nodes
  for ip in 192.168.1.100 192.168.1.101 192.168.1.102 192.168.1.103  192.168.1.104; do
       ssh-copy-id -o StrictHostKeyChecking=accept-new -i ~/.ssh/k8s_cluster_key.pub ansible@$ip
@@ -403,7 +406,7 @@ The table below reflects the CPU and memory values explicitly configured in the 
 | PostgreSQL | 256Mi / 1Gi | 250m / 1000m | Primary and read replicas use the same values |
 | MySQL | 256Mi / 1Gi | 250m / 1000m | Only if `mysql_enabled: true` |
 | Redis | 128Mi / 512Mi | 100m / 500m | Master pod only is pinned |
-| RabbitMQ | 256Mi / 1Gi | 100m / 500m | Explicit chart resources are set in the role |
+| RabbitMQ | 256Mi / 1Gi | 100m / 500m | Explicit pod resources are set in the role |
 | Elasticsearch | 2Gi / 4Gi | 500m / 2000m | ECK-managed data node |
 | Kibana | 512Mi / 1Gi | 250m / 1000m | Web UI |
 | Prometheus | 2Gi / 4Gi | 500m / 2000m | Main server pod |
@@ -576,7 +579,7 @@ spec:
 
 ## Gitea — Email-Based Authentication
 
-Gitea is configured with **local account + email** authentication only (no external SSO).
+Gitea is deployed directly from the official container image, backed by PostgreSQL, with **local account + email** authentication only (no external SSO).
 
 ### User Management
 
@@ -697,6 +700,24 @@ spec:
     requests:
       storage: 10Gi
 ```
+
+### Longhorn Scheduling Notes
+
+Longhorn checks storage on a per-disk basis, not by total free space across the whole cluster. A PVC can still stay Pending even when a node looks "70% free" if one of these limits is hit:
+
+- The selected disk does not have enough free space for another replica.
+- The storage class requires more replicas than the cluster can place.
+- The storage class is restricted to tagged disks, such as `longhorn-fast` using `diskSelector: ssd`.
+
+Default tuning in this repo:
+
+- `longhorn` uses 2 replicas.
+- `longhorn-fast` uses 2 replicas and requires SSD-tagged disks.
+- `longhorn-backup` uses 1 replica for less critical workloads.
+- `storageMinimalAvailablePercentage` is set to `5` to keep Longhorn from blocking too early on small disks.
+- `storageOverProvisioningPercentage` is set to `150` to allow some sparse-file headroom.
+
+If a workload does not need high availability, point it at `longhorn-backup` to reduce replica pressure and disk usage.
 
 ### Push/Pull Images from Harbor
 
@@ -868,6 +889,17 @@ kubectl exec -n vault openbao-0 -- bao operator unseal <KEY>
 # SSH into a node
 ssh -i ~/.ssh/k8s_cluster_key ubuntu@192.168.1.11
 ```
+
+## SSH Login Options
+
+To avoid repeated prompts during Ansible runs, use one of these approaches:
+
+1. `ssh-copy-id` plus passwordless sudo for the SSH user.
+2. Store `ansible_password` and `ansible_become_password` in the encrypted
+   `inventory/group_vars/vault.yml` file.
+3. If Ansible reports a world-writable directory warning, run with
+   `ansible -i inventory/hosts.yml ...` so the repo inventory is used
+   explicitly.
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# Role: databases — Deploy PostgreSQL, MySQL, Redis, and RabbitMQ via Helm (Bitnami)
+# Role: databases — Deploy PostgreSQL, MySQL, Redis, and RabbitMQ
 # =============================================================================
 
 # ── Namespace ────────────────────────────────────────────────────────────────
@@ -148,42 +148,85 @@
           namespace: monitoring
   when: redis_enabled | bool
 
-# ── RabbitMQ ──────────────────────────────────────────────────────────────────
-- name: Install RabbitMQ
-  kubernetes.core.helm:
-    name: rabbitmq
-    chart_ref: bitnami/rabbitmq
-    chart_version: "{{ rabbitmq_version }}"
-    release_namespace: "{{ rabbitmq_namespace }}"
-    create_namespace: false
-    wait: true
-    wait_timeout: "10m"
-    values:
-      auth:
-        username: "{{ rabbitmq_username }}"
-        password: "{{ rabbitmq_password }}"
-        securePassword: false
-        erlangCookie: "{{ rabbitmq_erlang_cookie }}"
-      persistence:
-        enabled: true
-        storageClass: "{{ rabbitmq_storage_class }}"
-        size: "{{ rabbitmq_storage_size }}"
-      resources:
-        requests:
-          memory: 256Mi
-          cpu: 100m
-        limits:
-          memory: 1Gi
-          cpu: 500m
-      metrics:
-        enabled: true
-        serviceMonitor:
-          namespace: monitoring
-          labels:
-            release: kube-prometheus-stack
-          default:
-            enabled: true
+# ── RabbitMQ (direct StatefulSet with official image) ────────────────────────
+- name: Render RabbitMQ ConfigMap
+  ansible.builtin.template:
+    src: rabbitmq-configmap.yaml.j2
+    dest: /tmp/rabbitmq-configmap.yaml
+    mode: "0644"
   when: rabbitmq_enabled | bool
+
+- name: Render RabbitMQ Secret
+  ansible.builtin.template:
+    src: rabbitmq-secret.yaml.j2
+    dest: /tmp/rabbitmq-secret.yaml
+    mode: "0644"
+  when: rabbitmq_enabled | bool
+
+- name: Render RabbitMQ Services
+  ansible.builtin.template:
+    src: rabbitmq-service.yaml.j2
+    dest: /tmp/rabbitmq-service.yaml
+    mode: "0644"
+  when: rabbitmq_enabled | bool
+
+- name: Render RabbitMQ StatefulSet
+  ansible.builtin.template:
+    src: rabbitmq-statefulset.yaml.j2
+    dest: /tmp/rabbitmq-statefulset.yaml
+    mode: "0644"
+  when: rabbitmq_enabled | bool
+
+- name: Apply RabbitMQ base resources
+  block:
+    - name: Remove existing RabbitMQ Service and StatefulSet
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - delete
+          - -f
+          - /tmp/rabbitmq-service.yaml
+          - -f
+          - /tmp/rabbitmq-statefulset.yaml
+          - --ignore-not-found
+      changed_when: false
+
+    - name: Apply RabbitMQ base resources
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - apply
+          - -f
+          - /tmp/rabbitmq-configmap.yaml
+          - -f
+          - /tmp/rabbitmq-secret.yaml
+          - -f
+          - /tmp/rabbitmq-service.yaml
+          - -f
+          - /tmp/rabbitmq-statefulset.yaml
+      changed_when: true
+  when: rabbitmq_enabled | bool
+
+- name: Render RabbitMQ ServiceMonitor
+  ansible.builtin.template:
+    src: rabbitmq-servicemonitor.yaml.j2
+    dest: /tmp/rabbitmq-servicemonitor.yaml
+    mode: "0644"
+  when:
+    - rabbitmq_enabled | bool
+    - monitoring_enabled | default(true) | bool
+
+- name: Apply RabbitMQ ServiceMonitor
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - apply
+      - -f
+      - /tmp/rabbitmq-servicemonitor.yaml
+  changed_when: true
+  when:
+    - rabbitmq_enabled | bool
+    - monitoring_enabled | default(true) | bool
 
 - name: Wait for database pods to be ready
   ansible.builtin.shell: >
@@ -198,8 +241,8 @@
 - name: Display database connection info
   ansible.builtin.debug:
     msg:
-      - "PostgreSQL: postgresql.{{ postgresql_namespace }}.svc.cluster.local:5432"
-      - "MySQL: mysql.{{ mysql_namespace }}.svc.cluster.local:3306"
-      - "Redis: redis-master.{{ redis_namespace }}.svc.cluster.local:6379"
-      - "RabbitMQ: rabbitmq.{{ rabbitmq_namespace }}.svc.cluster.local:5672"
-      - "RabbitMQ Management: rabbitmq.{{ rabbitmq_namespace }}.svc.cluster.local:15672"
+      - "PostgreSQL: postgresql.{{ postgresql_namespace }}.svc.{{ cluster_domain }}:5432"
+      - "MySQL: mysql.{{ mysql_namespace }}.svc.{{ cluster_domain }}:3306"
+      - "Redis: redis-master.{{ redis_namespace }}.svc.{{ cluster_domain }}:6379"
+      - "RabbitMQ: rabbitmq.{{ rabbitmq_namespace }}.svc.{{ cluster_domain }}:5672"
+      - "RabbitMQ Management: rabbitmq.{{ rabbitmq_namespace }}.svc.{{ cluster_domain }}:15672"
