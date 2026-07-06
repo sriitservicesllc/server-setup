@@ -2,12 +2,6 @@
 
 > **Small Product Development Company Stack** | 1 Master + 3 Workers (configurable) | Bare-metal | 28-step automated setup | **100% Open Source**
 
-This repo now has two deployment tracks:
-- `site.yml` for the Kubernetes cluster
-- `site-swarm.yml` for Docker Swarm with `swarm-cd`
-
-The Swarm track uses host-path persistence under `/srv/swarm`. `Longhorn` remains a Kubernetes-only storage layer.
-
 ---
 
 ## ✅ Open Source License Audit
@@ -365,23 +359,6 @@ ansible-playbook site.yml --tags "velero,backup" --ask-vault-pass
 
 # Validate cluster health
 ansible-playbook site.yml --tags validate --ask-vault-pass
-```
-
----
-
-## Docker Swarm Deployment
-
-Use the Swarm inventory and playbook when you want the Docker-native stack:
-
-```bash
-# Full Swarm bootstrap and stack deployment
-ansible-playbook -i inventory/swarm_hosts.yml site-swarm.yml
-
-# Swarm bootstrap only
-ansible-playbook -i inventory/swarm_hosts.yml site-swarm.yml --tags "docker,swarm,bootstrap"
-
-# SwarmCD only
-ansible-playbook -i inventory/swarm_hosts.yml site-swarm.yml --tags swarm_cd
 ```
 
 ---
