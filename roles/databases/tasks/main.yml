@@ -1,6 +1,6 @@
 ---
 # =============================================================================
-# Role: databases — Deploy PostgreSQL, MySQL, and Redis via Helm (Bitnami)
+# Role: databases — Deploy PostgreSQL, MySQL, Redis, and RabbitMQ via Helm (Bitnami)
 # =============================================================================
 
 # ── Namespace ────────────────────────────────────────────────────────────────
@@ -148,6 +148,43 @@
           namespace: monitoring
   when: redis_enabled | bool
 
+# ── RabbitMQ ──────────────────────────────────────────────────────────────────
+- name: Install RabbitMQ
+  kubernetes.core.helm:
+    name: rabbitmq
+    chart_ref: bitnami/rabbitmq
+    chart_version: "{{ rabbitmq_version }}"
+    release_namespace: "{{ rabbitmq_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: "10m"
+    values:
+      auth:
+        username: "{{ rabbitmq_username }}"
+        password: "{{ rabbitmq_password }}"
+        securePassword: false
+        erlangCookie: "{{ rabbitmq_erlang_cookie }}"
+      persistence:
+        enabled: true
+        storageClass: "{{ rabbitmq_storage_class }}"
+        size: "{{ rabbitmq_storage_size }}"
+      resources:
+        requests:
+          memory: 256Mi
+          cpu: 100m
+        limits:
+          memory: 1Gi
+          cpu: 500m
+      metrics:
+        enabled: true
+        serviceMonitor:
+          namespace: monitoring
+          labels:
+            release: kube-prometheus-stack
+          default:
+            enabled: true
+  when: rabbitmq_enabled | bool
+
 - name: Wait for database pods to be ready
   ansible.builtin.shell: >
     kubectl get pods -n {{ postgresql_namespace }} --no-headers
@@ -164,3 +201,5 @@
       - "PostgreSQL: postgresql.{{ postgresql_namespace }}.svc.cluster.local:5432"
       - "MySQL: mysql.{{ mysql_namespace }}.svc.cluster.local:3306"
       - "Redis: redis-master.{{ redis_namespace }}.svc.cluster.local:6379"
+      - "RabbitMQ: rabbitmq.{{ rabbitmq_namespace }}.svc.cluster.local:5672"
+      - "RabbitMQ Management: rabbitmq.{{ rabbitmq_namespace }}.svc.cluster.local:15672"

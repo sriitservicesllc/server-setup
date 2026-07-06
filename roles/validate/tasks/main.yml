@@ -66,6 +66,7 @@
       - "  PostgreSQL:  postgresql.databases.svc.cluster.local:5432"
       - "  MySQL:       mysql.databases.svc.cluster.local:3306"
       - "  Redis:       redis-master.databases.svc.cluster.local:6379"
+      - "  RabbitMQ:    rabbitmq.databases.svc.cluster.local:5672"
       - "------------------------------------------------------------"
       - " kubeconfig saved to: {{ playbook_dir }}/kubeconfig/admin.conf"
       - "============================================================"

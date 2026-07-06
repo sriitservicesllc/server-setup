@@ -22,6 +22,8 @@ kong_db_password: "CHANGE_ME_Kong_DB_Password"
 postgresql_password: "CHANGE_ME_PG_Password"
 mysql_root_password: "CHANGE_ME_MySQL_Password"
 redis_password: "CHANGE_ME_Redis_Password"
+rabbitmq_password: "CHANGE_ME_RabbitMQ_Password"
+rabbitmq_erlang_cookie: "CHANGE_ME_RabbitMQ_Erlang_Cookie"
 
 # ── Monitoring ────────────────────────────────────────────────────────────────
 grafana_admin_password: "CHANGE_ME_Grafana_Password"

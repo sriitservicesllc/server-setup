@@ -81,6 +81,15 @@ redis_storage_class: "longhorn"
 redis_storage_size: "2Gi"
 redis_password: "Redis@Cache1!"     # CHANGE — use vault in production
 
+rabbitmq_enabled: true
+rabbitmq_namespace: "databases"
+rabbitmq_version: "16.0.14"         # Bitnami RabbitMQ Helm chart
+rabbitmq_storage_class: "longhorn"
+rabbitmq_storage_size: "5Gi"
+rabbitmq_username: "rabbitmq"
+rabbitmq_password: "RabbitMQ@Queue1!"    # CHANGE — use vault in production
+rabbitmq_erlang_cookie: "RabbitMQ@Cookie1!"  # CHANGE — use vault in production
+
 # ── Logging (EFK Stack) ─────────────────────────────────────────────────────
 logging_enabled: true
 logging_namespace: "logging"

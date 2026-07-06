@@ -27,6 +27,7 @@ DATABASE ENDPOINTS (cluster-internal):
   PostgreSQL:  postgresql.{{ postgresql_namespace }}.svc.cluster.local:5432
   MySQL:       mysql.{{ mysql_namespace }}.svc.cluster.local:3306
   Redis:       redis-master.{{ redis_namespace }}.svc.cluster.local:6379
+  RabbitMQ:    rabbitmq.{{ rabbitmq_namespace }}.svc.cluster.local:5672
 
 KUBECONFIG:
   File: kubeconfig/admin.conf

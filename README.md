@@ -30,6 +30,7 @@ Every component in this stack is verified open source. No enterprise licenses, n
 | **PostgreSQL** | PostgreSQL License | |
 | **MySQL** | GPL-2.0 | |
 | **Redis** | BSD-3-Clause (≤7.2) | Bitnami chart uses Redis 7.x |
+| **RabbitMQ** | MPL-2.0 | Bitnami chart |
 | **Elasticsearch** | ELv2 | Free self-hosted; not Apache but free-to-use |
 | **Kibana** | ELv2 | Same as above |
 | **Fluent Bit** | Apache 2.0 | |
@@ -187,6 +188,7 @@ Every component in this stack is verified open source. No enterprise licenses, n
 | **PostgreSQL** | `postgresql.databases.svc.cluster.local:5432` | HA with 2 read replicas, `pg_stat_statements`, `uuid-ossp` |
 | **MySQL** | `mysql.databases.svc.cluster.local:3306` | Primary + 1 secondary |
 | **Redis** | `redis-master.databases.svc.cluster.local:6379` | Sentinel HA mode, 2 replicas |
+| **RabbitMQ** | `rabbitmq.databases.svc.cluster.local:5672` | AMQP broker with persistent volume and Prometheus metrics |
 
 ### 📋 Layer 8 — Logging (Step 23)
 
@@ -401,6 +403,7 @@ The table below reflects the CPU and memory values explicitly configured in the 
 | PostgreSQL | 256Mi / 1Gi | 250m / 1000m | Primary and read replicas use the same values |
 | MySQL | 256Mi / 1Gi | 250m / 1000m | Only if `mysql_enabled: true` |
 | Redis | 128Mi / 512Mi | 100m / 500m | Master pod only is pinned |
+| RabbitMQ | 256Mi / 1Gi | 100m / 500m | Explicit chart resources are set in the role |
 | Elasticsearch | 2Gi / 4Gi | 500m / 2000m | ECK-managed data node |
 | Kibana | 512Mi / 1Gi | 250m / 1000m | Web UI |
 | Prometheus | 2Gi / 4Gi | 500m / 2000m | Main server pod |
@@ -496,6 +499,7 @@ server {
 | PostgreSQL | Internal only | `postgresql.databases.svc.cluster.local:5432` |
 | MySQL | Internal only | `mysql.databases.svc.cluster.local:3306` |
 | Redis | Internal only | `redis-master.databases.svc.cluster.local:6379` |
+| RabbitMQ | Internal only | `rabbitmq.databases.svc.cluster.local:5672` |
 | Velero | CLI only | Backups live in MinIO; use the `velero` CLI |
 
 ---
@@ -796,7 +800,7 @@ server-setup/
     ├── argocd/             # 19 GitOps CD
     ├── sonarqube/          # 20 Code quality
     ├── vault_hashicorp/    # 21 Secrets management
-    ├── databases/          # 22 PostgreSQL + MySQL + Redis
+    ├── databases/          # 22 PostgreSQL + MySQL + Redis + RabbitMQ
     ├── logging/            # 23 EFK stack
     ├── monitoring/         # 24 Prometheus + Grafana
     ├── wiki_js/            # 25 Team documentation
