@@ -46,6 +46,18 @@
     dest: /tmp/gitea-secret.yaml
     mode: "0644"
 
+- name: Render Gitea Actions runner secret
+  ansible.builtin.template:
+    src: gitea-runner-secret.yaml.j2
+    dest: /tmp/gitea-runner-secret.yaml
+    mode: "0644"
+  when: gitea_runner_enabled | bool
+
+- name: Apply Gitea Actions runner secret
+  ansible.builtin.command: kubectl apply -f /tmp/gitea-runner-secret.yaml
+  changed_when: true
+  when: gitea_runner_enabled | bool
+
 - name: Render Gitea PVC
   ansible.builtin.template:
     src: gitea-pvc.yaml.j2
@@ -70,6 +82,13 @@
     dest: /tmp/gitea-ingress.yaml
     mode: "0644"
 
+- name: Render Gitea Actions runner deployment
+  ansible.builtin.template:
+    src: gitea-runner-deployment.yaml.j2
+    dest: /tmp/gitea-runner-deployment.yaml
+    mode: "0644"
+  when: gitea_runner_enabled | bool
+
 - name: Apply Gitea base resources
   ansible.builtin.command: >
     kubectl apply
@@ -85,13 +104,34 @@
   register: gitea_rollout
   changed_when: false
 
+- name: Apply Gitea Actions runner resources
+  ansible.builtin.command: >
+    kubectl apply
+    -f /tmp/gitea-runner-deployment.yaml
+  changed_when: true
+  when: gitea_runner_enabled | bool
+
+- name: Wait for Gitea Actions runner to be ready
+  ansible.builtin.command: kubectl rollout status -n {{ gitea_namespace }} deployment/gitea-act-runner --timeout=10m
+  register: gitea_runner_rollout
+  changed_when: false
+  when: gitea_runner_enabled | bool
+
+- name: Get Gitea pod name
+  ansible.builtin.command: >
+    kubectl get pods -n {{ gitea_namespace }}
+    -l app.kubernetes.io/name=gitea
+    -o jsonpath='{.items[0].metadata.name}'
+  register: gitea_pod_name
+  changed_when: false
+
 - name: Ensure Gitea admin user exists
   ansible.builtin.shell: >
-    kubectl exec -n {{ gitea_namespace }} deployment/gitea -- sh -lc '
-      if gitea admin user list 2>/dev/null | grep -Fq "{{ gitea_admin_user }}"; then
+    kubectl exec -n {{ gitea_namespace }} {{ gitea_pod_name.stdout }} -c gitea -- sh -lc '
+      if su -s /bin/sh git -c "gitea admin user list 2>/dev/null | grep -Fq \"{{ gitea_admin_user }}\""; then
         echo "admin user exists";
       else
-        gitea admin user create --username "{{ gitea_admin_user }}" --password "{{ gitea_admin_password }}" --email "{{ gitea_admin_email }}" --admin --must-change-password=false;
+        su -s /bin/sh git -c "gitea admin user create --username \"{{ gitea_admin_user }}\" --password \"{{ gitea_admin_password }}\" --email \"{{ gitea_admin_email }}\" --admin --must-change-password=false";
       fi
     '
   register: gitea_admin_bootstrap
@@ -124,4 +164,10 @@
       - "   Name: Woodpecker CI"
       - "   Redirect: https://{{ woodpecker_hostname }}/authorize"
       - "   -> Copy Client ID + Secret -> set in vault.yml"
+      - "-------------------------------------------------------"
+      - " Gitea Actions runner:"
+      - "   Enabled: {{ 'yes' if gitea_runner_enabled else 'no' }}"
+      - "   Runner: {{ gitea_runner_name }}"
+      - "   Image: {{ gitea_runner_image }}"
+      - "   Gitea Instance URL: http://gitea.{{ gitea_namespace }}.svc.{{ cluster_domain }}:3000"
       - "======================================================="

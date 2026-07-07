@@ -1,0 +1,87 @@
+---
+# =============================================================================
+# Role: registry_trust - Install Harbor CA trust material on cluster nodes
+# =============================================================================
+
+- name: Read Harbor TLS certificate from the Harbor namespace
+  ansible.builtin.command: >-
+    kubectl get secret {{ harbor_registry_ca_name }}
+    -n {{ harbor_registry_ca_namespace }}
+    -o jsonpath='{.data.tls\.crt}'
+  delegate_to: "{{ groups['k8s_masters'][0] }}"
+  run_once: true
+  register: harbor_registry_tls_secret
+  changed_when: false
+
+- name: Store Harbor TLS certificate as a delegated fact
+  ansible.builtin.set_fact:
+    harbor_registry_tls_cert_pem: "{{ harbor_registry_tls_secret.stdout | b64decode }}"
+  delegate_to: "{{ groups['k8s_masters'][0] }}"
+  delegate_facts: true
+  run_once: true
+  changed_when: false
+
+- name: Ensure Harbor TLS certificate was retrieved
+  ansible.builtin.assert:
+    that:
+      - hostvars[groups['k8s_masters'][0]].harbor_registry_tls_cert_pem is defined
+      - hostvars[groups['k8s_masters'][0]].harbor_registry_tls_cert_pem | length > 0
+    fail_msg: >-
+      Harbor TLS certificate secret {{ harbor_registry_ca_name }}
+      was not found in namespace {{ harbor_registry_ca_namespace }}.
+  run_once: true
+
+- name: Ensure system CA directory exists
+  ansible.builtin.file:
+    path: /usr/local/share/ca-certificates
+    state: directory
+    mode: "0755"
+
+- name: Ensure containerd registry trust directory exists
+  ansible.builtin.file:
+    path: "{{ harbor_registry_containerd_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure Docker registry trust directory exists
+  ansible.builtin.file:
+    path: "{{ harbor_registry_docker_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Install Harbor CA into the system trust store
+  ansible.builtin.copy:
+    dest: "{{ harbor_registry_ca_file }}"
+    content: "{{ hostvars[groups['k8s_masters'][0]].harbor_registry_tls_cert_pem }}"
+    mode: "0644"
+  register: harbor_system_ca
+
+- name: Install Harbor CA for containerd
+  ansible.builtin.copy:
+    dest: "{{ harbor_registry_containerd_dir }}/ca.crt"
+    content: "{{ hostvars[groups['k8s_masters'][0]].harbor_registry_tls_cert_pem }}"
+    mode: "0644"
+  register: harbor_containerd_ca
+
+- name: Install Harbor CA for Docker
+  ansible.builtin.copy:
+    dest: "{{ harbor_registry_docker_dir }}/ca.crt"
+    content: "{{ hostvars[groups['k8s_masters'][0]].harbor_registry_tls_cert_pem }}"
+    mode: "0644"
+  register: harbor_docker_ca
+
+- name: Refresh the system CA bundle
+  ansible.builtin.command: update-ca-certificates
+  when: harbor_system_ca.changed
+  changed_when: true
+
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Restart Docker when present so it picks up the registry CA
+  ansible.builtin.service:
+    name: docker
+    state: restarted
+  when:
+    - harbor_docker_ca.changed
+    - ansible_facts.services.get('docker.service') is not none

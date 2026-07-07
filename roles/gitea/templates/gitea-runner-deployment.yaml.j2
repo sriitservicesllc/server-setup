@@ -1,0 +1,54 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea-act-runner
+  namespace: {{ gitea_namespace }}
+  labels:
+    app.kubernetes.io/name: gitea-act-runner
+spec:
+  replicas: {{ gitea_runner_replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gitea-act-runner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gitea-act-runner
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 0
+      containers:
+        - name: act-runner
+          image: {{ gitea_runner_image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GITEA_INSTANCE_URL
+              value: "http://gitea.{{ gitea_namespace }}.svc.{{ cluster_domain }}:3000"
+            - name: GITEA_RUNNER_NAME
+              value: "{{ gitea_runner_name }}"
+            - name: GITEA_RUNNER_LABELS
+              value: "{{ gitea_runner_labels }}"
+            - name: GITEA_RUNNER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ gitea_runner_secret_name }}
+                  key: runner-registration-token
+            - name: DOCKER_HOST
+              value: unix:///var/run/docker.sock
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+      volumes:
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket

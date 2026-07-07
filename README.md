@@ -581,6 +581,8 @@ spec:
 
 Gitea is deployed directly from the official container image, backed by PostgreSQL, with **local account + email** authentication only (no external SSO).
 
+The same role now also deploys an `act_runner` instance for Gitea Actions. It registers automatically from the shared `gitea_runner_registration_token` and talks to a Docker daemon through `/var/run/docker.sock` so workflows can run Docker-based job steps.
+
 ### User Management
 
 | Action | How |
@@ -622,6 +624,22 @@ After Gitea deploys, create an OAuth2 app:
    woodpecker_gitea_client_secret: "YOUR_CLIENT_SECRET"
    ```
 6. Run: `ansible-playbook site.yml --tags woodpecker --ask-vault-pass`
+
+### Gitea Actions Runner
+
+The runner is enabled by default with these values in `inventory/group_vars/all.yml`:
+
+- `gitea_runner_enabled`
+- `gitea_runner_image`
+- `gitea_runner_name`
+- `gitea_runner_labels`
+- `gitea_runner_registration_token`
+
+The token is shared between the Gitea server and the runner pod. Move it to `vault.yml` before production use.
+
+If you want to disable the runner, set `gitea_runner_enabled: false` and re-run the `gitea` tag.
+
+This runner mode requires a node or host with Docker installed and `docker.sock` available. The current cluster bootstrap installs `containerd`, so use a Docker-enabled runner host or adjust the host bootstrap before scheduling this pod.
 
 ---
 
@@ -731,6 +749,24 @@ docker push registry.sriitservices.local/library/myapp:latest
 
 # Use in a Kubernetes pod
 # image: registry.sriitservices.local/library/myapp:latest
+```
+
+### Harbor CA Trust
+
+The playbook now copies Harbor's TLS certificate into:
+
+- `/usr/local/share/ca-certificates/registry.sriitservices.local.crt`
+- `/etc/containerd/certs.d/registry.sriitservices.local/ca.crt`
+- `/etc/docker/certs.d/registry.sriitservices.local/ca.crt`
+
+It also refreshes the system CA bundle. containerd uses the `certs.d` trust directory, so the node-side CA file is enough for image pulls on the standard setup in this repo.
+
+If you need to do the same on a separate Docker build runner, create the Docker trust directory there and restart Docker after placing the CA certificate:
+
+```bash
+sudo mkdir -p /etc/docker/certs.d/registry.sriitservices.local
+sudo cp harbor-ca.crt /etc/docker/certs.d/registry.sriitservices.local/ca.crt
+sudo systemctl restart docker
 ```
 
 ---

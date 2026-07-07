@@ -54,6 +54,11 @@ harbor_hostname: "registry.sriitservices.local"
 harbor_admin_password: "Harbor12345!"   # CHANGE THIS — use vault in production
 harbor_storage_class: "longhorn"
 harbor_storage_size: "10Gi"
+harbor_registry_ca_name: "harbor-tls"
+harbor_registry_ca_namespace: "{{ harbor_namespace }}"
+harbor_registry_ca_file: "/usr/local/share/ca-certificates/{{ harbor_hostname }}.crt"
+harbor_registry_containerd_dir: "/etc/containerd/certs.d/{{ harbor_hostname }}"
+harbor_registry_docker_dir: "/etc/docker/certs.d/{{ harbor_hostname }}"
 
 # ── Trivy (Container Image Scanner) ─────────────────────────────────────────
 trivy_operator_enabled: true
@@ -184,6 +189,13 @@ gitea_admin_email: "gitadmin@sriitservices.com"
 gitea_db_password: "Gitea@DBPass1!"  # CHANGE — use vault
 gitea_storage_class: "longhorn"
 gitea_storage_size: "5Gi"
+gitea_runner_enabled: true
+gitea_runner_image: "gitea/act_runner:latest"
+gitea_runner_replicas: 1
+gitea_runner_name: "gitea-act-runner"
+gitea_runner_labels: "ubuntu-latest:docker://gitea/runner-images:ubuntu-latest,ubuntu-22.04:docker://gitea/runner-images:ubuntu-22.04,ubuntu-20.04:docker://gitea/runner-images:ubuntu-20.04"
+gitea_runner_registration_token: "CHANGE_ME_Gitea_Runner_Token"
+gitea_runner_secret_name: "gitea-actions-runner-secret"
 # Email / SMTP settings for account registration & notifications
 gitea_smtp_enabled: false          # Set true and configure below to enable email
 gitea_smtp_host: "smtp.gmail.com"

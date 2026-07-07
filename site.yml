@@ -229,3 +229,11 @@
   roles:
     - role: validate
       tags: [validate, always]
+
+- name: "29 · Registry Trust Bootstrap"
+  hosts: k8s_cluster
+  become: true
+  roles:
+    - role: registry_trust
+      tags: [registry, trust, harbor]
+      when: harbor_enabled | bool
