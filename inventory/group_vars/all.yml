@@ -35,7 +35,7 @@ ingress_nginx_version: "4.15.1"
 # ── cert-manager (TLS) ──────────────────────────────────────────────────────
 cert_manager_enabled: true
 cert_manager_version: "v1.14.5"
-cert_manager_email: "devops@sriitservices.com"   # Let's Encrypt notifications
+cert_manager_email: "devops@sriitservices.local"   # Let's Encrypt notifications
 
 # ── Storage ─────────────────────────────────────────────────────────────────
 storage_enabled: true
@@ -121,7 +121,7 @@ alertmanager_storage_size: "2Gi"
 # ── External DNS (optional) ──────────────────────────────────────────────────
 external_dns_enabled: false        # Set true if using a DNS provider
 external_dns_provider: "cloudflare"
-external_dns_domain_filter: "sriitservices.com"
+external_dns_domain_filter: "sriitservices.local"
 
 # ── MinIO (In-cluster S3-compatible Object Store) ────────────────────────────
 minio_enabled: true
@@ -185,7 +185,7 @@ gitea_image_tag: "1.26.4"          # Official Gitea container image tag
 gitea_hostname: "git.sriitservices.local"
 gitea_admin_user: "gitadmin"
 gitea_admin_password: "Gitea@Admin1!"  # CHANGE — use vault
-gitea_admin_email: "gitadmin@sriitservices.com"
+gitea_admin_email: "gitadmin@sriitservices.local"
 gitea_db_password: "Gitea@DBPass1!"  # CHANGE — use vault
 gitea_storage_class: "longhorn"
 gitea_storage_size: "5Gi"
@@ -202,7 +202,7 @@ gitea_smtp_host: "smtp.gmail.com"
 gitea_smtp_port: 587
 gitea_smtp_user: ""
 gitea_smtp_password: ""            # CHANGE — use vault
-gitea_smtp_from: "gitea@sriitservices.com"
+gitea_smtp_from: "gitea@sriitservices.local"
 # Registration settings
 gitea_allow_registration: true     # Set false after initial team setup
 gitea_require_signin: false        # Set true to force login for browsing

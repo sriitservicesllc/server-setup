@@ -76,3 +76,78 @@
 - name: Display NGINX Ingress external IP
   ansible.builtin.debug:
     msg: "NGINX Ingress LoadBalancer IP: {{ ingress_lb_ip.stdout }} — Point your DNS records here!"
+
+- name: Get CoreDNS ConfigMap
+  ansible.builtin.command: kubectl get configmap coredns -n kube-system -o json
+  register: coredns_cm_output
+  changed_when: false
+
+- name: Write current CoreDNS ConfigMap to temp file
+  ansible.builtin.copy:
+    content: "{{ coredns_cm_output.stdout }}"
+    dest: /tmp/coredns-cm.json
+    mode: "0644"
+
+- name: Update Corefile with internal host mappings
+  ansible.builtin.shell: |
+    python3 - << 'EOF'
+    import json, re
+    with open('/tmp/coredns-cm.json', 'r') as f:
+        cm = json.load(f)
+    corefile = cm['data']['Corefile']
+    
+    # Clean up existing hosts block to prevent duplicates
+    corefile = re.sub(r'\n\s*hosts\s*\{.*?\}\s*\n', '\n', corefile, flags=re.DOTALL)
+    
+    # List of all cluster hostnames to route internally to Ingress IP
+    hostnames = [
+      "{{ harbor_hostname }}",
+      "{{ gitea_hostname }}",
+      "{{ woodpecker_hostname }}",
+      "{{ argocd_hostname }}",
+      "{{ sonarqube_hostname }}",
+      "{{ vault_hostname }}",
+      "{{ wiki_js_hostname }}",
+      "{{ mattermost_hostname }}",
+      "{{ infisical_hostname }}",
+      "{{ minio_hostname }}",
+      "{{ minio_console_hostname }}",
+      "{{ kong_proxy_hostname }}",
+      "{{ kong_manager_hostname }}",
+      "{{ kong_admin_api_hostname }}"
+    ]
+    
+    # Construct the hosts block
+    hosts_block = "\n        hosts {\n"
+    hosts_block += "           {{ ingress_lb_ip.stdout }} " + " ".join(hostnames) + "\n"
+    hosts_block += "           fallthrough\n"
+    hosts_block += "        }\n"
+    
+    # Insert the block before the last closing brace
+    idx = corefile.rfind('}')
+    if idx != -1:
+        corefile = corefile[:idx] + hosts_block + corefile[idx:]
+        
+    cm['data']['Corefile'] = corefile
+    with open('/tmp/coredns-cm-updated.json', 'w') as f:
+        json.dump(cm, f)
+    EOF
+  changed_when: false
+
+- name: Apply updated CoreDNS ConfigMap
+  ansible.builtin.command: kubectl apply -f /tmp/coredns-cm-updated.json
+  changed_when: true
+
+- name: Clean up temporary files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/coredns-cm.json
+    - /tmp/coredns-cm-updated.json
+  changed_when: false
+
+- name: Restart CoreDNS deployment to apply changes
+  ansible.builtin.command: kubectl rollout restart deployment/coredns -n kube-system
+  changed_when: true
+

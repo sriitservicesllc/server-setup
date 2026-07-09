@@ -581,7 +581,7 @@ spec:
 
 Gitea is deployed directly from the official container image, backed by PostgreSQL, with **local account + email** authentication only (no external SSO).
 
-The same role now also deploys an `act_runner` instance for Gitea Actions. It registers automatically from the shared `gitea_runner_registration_token` and talks to a Docker daemon through `/var/run/docker.sock` so workflows can run Docker-based job steps.
+The same role now also deploys an `act_runner` instance for Gitea Actions. It registers automatically from the shared `gitea_runner_registration_token` and talks to a local Docker daemon provided by a Docker-in-Docker (DinD) sidecar container, so workflows can run Docker-based job steps without depending on the host's Docker socket.
 
 ### User Management
 
@@ -625,6 +625,40 @@ After Gitea deploys, create an OAuth2 app:
    ```
 6. Run: `ansible-playbook site.yml --tags woodpecker --ask-vault-pass`
 
+### Configure Repositories & Secrets in Woodpecker
+
+Once you log in to the Woodpecker dashboard (`https://ci.sriitservices.local`) with your Gitea credentials, perform the following setup steps for your repository:
+
+#### 1. Activate Trusted Mode
+The container build/push steps run as a privileged step to talk to the Docker daemon. Woodpecker requires the repo to be flagged as **Trusted** in the dashboard UI for this to execute.
+* **Via Web UI:**
+  1. Go to the Woodpecker dashboard.
+  2. Open your repository.
+  3. Navigate to **Settings** (gear icon on the top right).
+  4. Toggle **Trusted** to `ON`.
+  > [!NOTE]
+  > Only Woodpecker server administrators (configured via `gitea_admin_user` / `WOODPECKER_ADMIN`) can activate Trusted mode.
+* **Via CLI:**
+  ```bash
+  woodpecker-cli repo update --repository <owner/repo> --trusted
+  ```
+
+#### 2. Add Repository Secrets
+Navigate to your Woodpecker repository settings and register the following credentials under the **Secrets** tab (or via Woodpecker CLI):
+* **`harbor_username`**: Your Harbor username or a robot account's username.
+* **`harbor_password`**: Your Harbor password or a robot account's secret token.
+* **`argocd_server`**: Your ArgoCD server address.
+* **`argocd_auth_token`**: Your ArgoCD local/admin authentication token.
+
+* **Via CLI:**
+  ```bash
+  woodpecker-cli repo secret add --repository <owner/repo> --name harbor_username --value "<username>"
+  woodpecker-cli repo secret add --repository <owner/repo> --name harbor_password --value "<password>"
+  woodpecker-cli repo secret add --repository <owner/repo> --name argocd_server --value "<server_address>"
+  woodpecker-cli repo secret add --repository <owner/repo> --name argocd_auth_token --value "<auth_token>"
+  ```
+
+
 ### Gitea Actions Runner
 
 The runner is enabled by default with these values in `inventory/group_vars/all.yml`:
@@ -635,11 +669,27 @@ The runner is enabled by default with these values in `inventory/group_vars/all.
 - `gitea_runner_labels`
 - `gitea_runner_registration_token`
 
-The token is shared between the Gitea server and the runner pod. Move it to `vault.yml` before production use.
+The registration token must be retrieved from Gitea and configured in your settings. Move it to `vault.yml` before production use.
+
+#### How to Retrieve the Token & Integrate the Runner:
+1. Log in to your Gitea Web UI (e.g. `https://git.sriitservices.local`) as an administrator (`gitadmin`).
+2. Navigate to **Site Administration** (wrench icon or menu in the top-right).
+3. In the left panel, click on **Actions** → **Runners**.
+4. Click the **Create New Runner** button at the top right.
+5. Copy the generated **Registration Token**.
+6. Open your `inventory/group_vars/all.yml` (or `vault.yml`) and paste the token:
+   ```yaml
+   gitea_runner_registration_token: "YOUR_COPIED_TOKEN_HERE"
+   ```
+7. Re-apply the Gitea Ansible configuration:
+   ```bash
+   ansible-playbook site.yml --tags gitea --ask-vault-pass
+   ```
+   *This automatically recreates the secret and restarts the runner pods, registering them with Gitea.*
 
 If you want to disable the runner, set `gitea_runner_enabled: false` and re-run the `gitea` tag.
 
-This runner mode requires a node or host with Docker installed and `docker.sock` available. The current cluster bootstrap installs `containerd`, so use a Docker-enabled runner host or adjust the host bootstrap before scheduling this pod.
+The runner is configured with a Docker-in-Docker (`dind`) sidecar container and shares the daemon socket via an `emptyDir` volume. This design ensures compatibility with `containerd` or other non-Docker Kubernetes environments, eliminating the need for a host-level Docker daemon.
 
 ---
 
@@ -673,7 +723,7 @@ steps:
       repo: registry.sriitservices.local/library/${CI_REPO_NAME}
       tags: [latest, "${CI_COMMIT_SHA:0:8}"]
       username:
-        from_secret: harbor_user
+        from_secret: harbor_username
       password:
         from_secret: harbor_password
     when:
@@ -694,6 +744,19 @@ steps:
       - git push
     when:
       branch: main
+
+  - name: sync-argocd
+    image: argoproj/argocd:v2.11.2
+    environment:
+      ARGOCD_SERVER:
+        from_secret: argocd_server
+      ARGOCD_AUTH_TOKEN:
+        from_secret: argocd_auth_token
+    commands:
+      - argocd app sync ${CI_REPO_NAME} --server $${ARGOCD_SERVER} --auth-token $${ARGOCD_AUTH_TOKEN} --insecure
+    when:
+      branch: main
+
 ```
 
 **ArgoCD** watches the `k8s-manifests` repo and automatically deploys the updated image to the cluster.
@@ -884,6 +947,59 @@ server-setup/
 - [ ] Complete Wiki.js setup wizard → optionally enable Gitea Git storage backend
 - [ ] Review Trivy scan reports in Harbor UI (Security → Vulnerabilities)
 - [ ] Set `gitea_allow_registration: false` after initial team setup
+
+---
+
+## Exposing Services to the Internet (Let's Encrypt TLS)
+
+By default, the platform deploys all services with a `selfsigned-issuer` for safe internal-only use. When you are ready to expose services like Gitea and ArgoCD to the internet, follow these steps to provision and enforce public Let's Encrypt TLS certificates:
+
+### 1. Prerequisites
+* **Public DNS Records**: Point your public domain records (e.g., `git.example.com`, `argocd.example.com`) to the external/public IP address of your Ingress Controller (or your network's router/load balancer if port forwarding).
+* **Port 80/443 Access**: Cert-manager uses the ACME HTTP-01 challenge. Ensure ports `80` and `443` are open and routed from the internet to your NGINX Ingress Controller.
+
+### 2. Configure cert-manager Email
+In [inventory/group_vars/all.yml](file:///D:/Source/sriitservices/server-setup/inventory/group_vars/all.yml#L38), update `cert_manager_email` to a valid email address. This is required by Let's Encrypt for renewal notices:
+```yaml
+cert_manager_email: "your-email@example.com"
+```
+
+### 3. Update Service Configurations to Use Let's Encrypt
+To change the certificate issuer from self-signed to Let's Encrypt production, update the hostname and cluster-issuer for the respective services:
+
+#### For ArgoCD:
+1. Update `argocd_hostname` in [inventory/group_vars/all.yml](file:///D:/Source/sriitservices/server-setup/inventory/group_vars/all.yml#L225) to your public domain (e.g., `"argocd.example.com"`).
+2. Edit [roles/argocd/tasks/main.yml](file:///D:/Source/sriitservices/server-setup/roles/argocd/tasks/main.yml#L66) to change the cluster-issuer:
+   ```yaml
+   cert-manager.io/cluster-issuer: letsencrypt-prod
+   ```
+
+#### For Gitea:
+1. Update `gitea_hostname` in [inventory/group_vars/all.yml](file:///D:/Source/sriitservices/server-setup/inventory/group_vars/all.yml#L185) to your public domain (e.g., `"git.example.com"`).
+2. Edit [roles/gitea/templates/gitea-ingress.yaml.j2](file:///D:/Source/sriitservices/server-setup/roles/gitea/templates/gitea-ingress.yaml.j2#L10) to change the cluster-issuer:
+   ```yaml
+   cert-manager.io/cluster-issuer: letsencrypt-prod
+   ```
+
+*(You can also use `letsencrypt-staging` first to test the flow without hitting Let's Encrypt production rate limits).*
+
+### 4. Deploy the Changes
+Run the Ansible playbook with the tags for the updated components:
+```bash
+ansible-playbook site.yml --tags "cert_manager,argocd,gitea" --ask-vault-pass
+```
+
+### 5. Verify the Certificates
+Once deployed, check the status of the certificates inside the cluster and externally:
+```bash
+# Verify the certificates are READY
+kubectl get certificate argocd-tls -n argocd
+kubectl get certificate gitea-tls -n devops
+
+# Inspect HTTP SSL handshake externally
+curl -Iv https://argocd.example.com
+curl -Iv https://git.example.com
+```
 
 ---
 

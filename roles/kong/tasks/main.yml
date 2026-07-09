@@ -129,20 +129,22 @@
           servicePort: 80
           containerPort: 8000
         tls:
-          enabled: true
-          servicePort: 443
-          containerPort: 8443
+          enabled: false
         ingress:
           enabled: true
           ingressClassName: nginx
           hostname: "{{ kong_proxy_hostname }}"
           annotations:
-            cert-manager.io/cluster-issuer: selfsigned-issuer
+            cert-manager.io/cluster-issuer: letsencrypt-prod
             nginx.ingress.kubernetes.io/ssl-redirect: "true"
             nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
             nginx.ingress.kubernetes.io/proxy-body-size: "50m"
             nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
-          tls: "{{ kong_proxy_hostname }}-tls"
+            nginx.ingress.kubernetes.io/no-tls-redirect-locations: "/.well-known/acme-challenge/"
+          tls:
+            - secretName: "{{ kong_proxy_hostname }}-tls"
+              hosts:
+                - "{{ kong_proxy_hostname }}"
 
       # ── Admin API — internal only (whitelist to office CIDR) ───────────────
       admin:
@@ -162,7 +164,10 @@
             cert-manager.io/cluster-issuer: selfsigned-issuer
             nginx.ingress.kubernetes.io/ssl-redirect: "true"
             nginx.ingress.kubernetes.io/whitelist-source-range: "192.168.0.0/16,10.0.0.0/8"
-          tls: "{{ kong_admin_api_hostname }}-tls"
+          tls:
+            - secretName: "{{ kong_admin_api_hostname }}-tls"
+              hosts:
+                - "{{ kong_admin_api_hostname }}"
 
       # ── Kong Manager OSS — visual admin UI (no license required since 3.4) ─
       manager:
@@ -182,7 +187,10 @@
             cert-manager.io/cluster-issuer: selfsigned-issuer
             nginx.ingress.kubernetes.io/ssl-redirect: "true"
             nginx.ingress.kubernetes.io/whitelist-source-range: "192.168.0.0/16,10.0.0.0/8"
-          tls: "{{ kong_manager_hostname }}-tls"
+          tls:
+            - secretName: "{{ kong_manager_hostname }}-tls"
+              hosts:
+                - "{{ kong_manager_hostname }}"
 
       # ── Horizontal Pod Autoscaling ─────────────────────────────────────────
       autoscaling:
@@ -251,8 +259,8 @@
       - "======================================================="
       - "Kong Gateway OSS deployed successfully"
       - "Namespace: {{ kong_namespace }}"
-      - "Admin API: https://kong-admin.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
-      - "Manager UI: https://kong-manager.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
-      - "Proxy: https://kong.{{ harbor_hostname | regex_replace('^[^.]+\\.', '') }}"
+      - "Admin API: https://{{ kong_admin_api_hostname }}"
+      - "Manager UI: https://{{ kong_manager_hostname }}"
+      - "Proxy: https://{{ kong_proxy_hostname }}"
       - "Active OSS plugins: {{ kong_plugins | join(', ') }}"
       - "======================================================="
