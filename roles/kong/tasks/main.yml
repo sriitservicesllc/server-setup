@@ -13,9 +13,6 @@
 #   ✗ Kong Vitals analytics   ← Enterprise only
 #   ✗ Developer Portal        ← Enterprise only
 #
-# Architecture:
-#   Internet → MetalLB → NGINX Ingress → Kong Proxy → App Services
-#                                      ↘ Kong Manager OSS (admin UI)
 # =============================================================================
 
 - name: Create Kong namespace
