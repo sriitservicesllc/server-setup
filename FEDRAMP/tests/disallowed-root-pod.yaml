@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-root-violation-pod
+  namespace: default
+  labels:
+    test: fedramp-compliance-audit
+spec:
+  # Intentionally breaking FedRAMP rules to confirm policy rejection
+  containers:
+  - name: malicious-container
+    image: nginx:latest
+    securityContext:
+      privileged: true
+      runAsUser: 0
+      runAsNonRoot: false
+      allowPrivilegeEscalation: true
