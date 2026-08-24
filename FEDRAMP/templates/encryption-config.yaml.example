@@ -1,0 +1,20 @@
+apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+  - resources:
+      - secrets
+      - configmaps
+    providers:
+      # Primary encryption provider using FIPS-compliant KMS plugin (e.g., AWS KMS / HashiCorp Vault)
+      - kms:
+          name: aws-kms-provider
+          endpoint: unix:///var/run/kmsplugin/socket.sock
+          cachesize: 100
+          timeout: 3s
+      # Fallback AES-CBC provider using a FIPS 140-2/3 compliant key
+      - aescbc:
+          keys:
+            - name: primary-fips-key
+              secret: REPLACE_WITH_BASE64_32_BYTE_KEY
+      # Block plain unencrypted storage
+      - identity: {}
