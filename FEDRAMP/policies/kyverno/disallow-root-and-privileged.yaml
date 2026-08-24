@@ -1,0 +1,46 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: fedramp-workload-hardening
+  annotations:
+    policies.kyverno.io/title: FedRAMP Workload Isolation Policy
+    policies.kyverno.io/category: FedRAMP Security Baseline
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: block-root-execution
+      match:
+        any:
+        - resources:
+            kinds:
+              - Pod
+      validate:
+        message: "FedRAMP AC-6 Violation: Containers must enforce runAsNonRoot: true."
+        pattern:
+          spec:
+            securityContext:
+              runAsNonRoot: true
+            containers:
+              - name: "*"
+                securityContext:
+                  runAsNonRoot: true
+                  allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
+
+    - name: block-privileged-containers
+      match:
+        any:
+        - resources:
+            kinds:
+              - Pod
+      validate:
+        message: "FedRAMP CM-7 Violation: Privileged containers are strictly forbidden."
+        pattern:
+          spec:
+            containers:
+              - name: "*"
+                securityContext:
+                  privileged: false
