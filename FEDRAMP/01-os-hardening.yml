@@ -1,0 +1,107 @@
+---
+- name: Harden Host OS for FedRAMP & NIST SP 800-53 Compliance
+  hosts: all
+  become: true
+  vars:
+    sysctl_hardened_settings:
+      # Enable FIPS crypto enforcement check
+      crypto.fips_enabled: 1
+      # Network Hardening (Disable IP Forwarding except via CNI, block source routing)
+      net.ipv4.conf.all.accept_source_route: 0
+      net.ipv4.conf.default.accept_source_route: 0
+      net.ipv4.conf.all.accept_redirects: 0
+      net.ipv4.conf.default.accept_redirects: 0
+      net.ipv4.conf.all.secure_redirects: 0
+      net.ipv4.conf.default.secure_redirects: 0
+      net.ipv4.conf.all.send_redirects: 0
+      net.ipv4.conf.default.send_redirects: 0
+      net.ipv4.icmp_echo_ignore_broadcasts: 1
+      net.ipv4.tcp_syncookies: 1
+      net.ipv4.tcp_rfc1337: 1
+      # Memory Protection
+      kernel.randomize_va_space: 2
+      kernel.sysrq: 0
+      kernel.core_uses_pid: 1
+
+  tasks:
+    - name: Ensure FIPS mode is enabled at kernel boot
+      ansible.builtin.command:
+        cmd: cat /proc/sys/crypto/fips_enabled
+      register: fips_status
+      changed_when: false
+      failed_when: fips_status.stdout != "1"
+      ignore_errors: false
+
+    - name: Apply Kernel Hardening Parameters (sysctl)
+      ansible.posix.sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value | string }}"
+        state: present
+        reload: true
+      loop: "{{ sysctl_hardened_settings | dict2items }}"
+
+    - name: Disable Unnecessary Legacy Filesystems (CM-7)
+      ansible.builtin.copy:
+        dest: /etc/modprobe.d/disable-filesystems.conf
+        content: |
+          install cramfs /bin/true
+          install freevxfs /bin/true
+          install jffs2 /bin/true
+          install hfs /bin/true
+          install hfsplus /bin/true
+          install squasfs /bin/true
+          install udf /bin/true
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Enforce SSH Hardening Policies (AC-3, IA-2)
+      ansible.builtin.blockinfile:
+        path: /etc/ssh/sshd_config
+        block: |
+          Protocol 2
+          PermitRootLogin no
+          PasswordAuthentication no
+          X11Forwarding no
+          MaxAuthTries 3
+          ClientAliveInterval 300
+          ClientAliveCountMax 0
+          Ciphers aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr
+          MACs hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com
+        validate: sshd -t -f %s
+      notify: Restart SSH Server
+
+    - name: Install System Audit Daemon (AU-2)
+      ansible.builtin.package:
+        name:
+          - auditd
+          - audispd-plugins
+        state: present
+
+    - name: Configure Audit Rules for CIS/FedRAMP Baselines
+      ansible.builtin.copy:
+        dest: /etc/audit/rules.d/fedramp.rules
+        content: |
+          # Audit critical system calls and file changes
+          -w /etc/kubernetes/ -p wa -k k8s_config
+          -w /var/lib/kubelet/ -p wa -k kubelet_config
+          -w /etc/systemd/system/ -p wa -k systemd_config
+          -w /etc/passwd -p wa -k identity
+          -w /etc/shadow -p wa -k identity
+          -w /etc/sudoers -p wa -k privileged_access
+          -e 2
+        owner: root
+        group: root
+        mode: '0600'
+      notify: Restart Auditd
+
+  handlers:
+    - name: Restart SSH Server
+      ansible.builtin.service:
+        name: sshd
+        state: restarted
+
+    - name: Restart Auditd
+      ansible.builtin.service:
+        name: auditd
+        state: restarted
