@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: audit-log-forwarder
+  namespace: kube-system
+  labels:
+    app: audit-forwarder
+    fedramp-control: AU-6
+spec:
+  selector:
+    matchLabels:
+      app: audit-forwarder
+  template:
+    metadata:
+      labels:
+        app: audit-forwarder
+    spec:
+      serviceAccountName: fluentbit
+      containers:
+      - name: fluentbit
+        image: fluent/fluent-bit:2.2-debug
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          readOnlyRootFilesystem: true
+        env:
+        - name: SIEM_ENDPOINT
+          value: "siem-collector.fedramp-gov.internal"
+        volumeMounts:
+        - name: k8s-audit-logs
+          mountPath: /var/log/kubernetes/
+          readOnly: true
+        - name: config-volume
+          mountPath: /fluent-bit/etc/
+      volumes:
+      - name: k8s-audit-logs
+        hostPath:
+          path: /var/log/kubernetes/
+          type: Directory
+      - name: config-volume
+        configMap:
+          name: fluent-bit-config
