@@ -61,7 +61,7 @@ automatically (used to inject the QEMU guest agent into the cloud image).
 | 5 | [`lxc-db.sh`](lxc-db.sh) | Proxmox host | Dedicated LXC running **PostgreSQL 16 + Redis** (combined data tier) | CT `401` |
 | 6 | [`lxc-network.sh`](lxc-network.sh) | Proxmox host | Dedicated LXC running **Pi-hole** (DNS + ad-blocking), unattended install | CT `402` |
 | 7 | [`lxc-monitoring.sh`](lxc-monitoring.sh) | Proxmox host | Dedicated LXC running **Prometheus + Grafana** | CT `403` |
-| 8 | [`lxc-gitea.sh`](lxc-gitea.sh) | Proxmox host | Dedicated LXC running **Gitea** (binary + systemd unit, SQLite backend) | CT `404` |
+| 8 | [`lxc-gitea.sh`](lxc-gitea.sh) | Proxmox host | Dedicated LXC running **Gitea** (binary + systemd unit); provisions a `gitea` role/DB on the CT `401` PostgreSQL and points the installer at it. **Requires `lxc-db.sh` first.** | CT `404` |
 | 9 | [`deploy-redis-lxc.sh`](deploy-redis-lxc.sh) | Proxmox host | **Standalone, memory-tuned Redis** LXC + host-level kernel tuning (overcommit, THP, somaxconn) | CT `406` |
 | 10 | [`lxc-backup-and-snapshot.sh`](lxc-backup-and-snapshot.sh) | Proxmox host (cron) | Daily `pct snapshot` with retention pruning + compressed `vzdump` archives | CT `401`–`406` |
 | 11 | [`vzdump-rclone-hook.sh`](vzdump-rclone-hook.sh) | Proxmox host (vzdump hook) | On `backup-end`, push each `.tar.zst` to an `rclone` cloud remote; prune remote copies > 30 days | — |
@@ -110,7 +110,8 @@ chmod +x create-lxc-template.sh deploy-lxc-batch.sh
 ### Track C — Service containers (independent, run any subset)
 
 Each of these creates its **own** container directly from the Debian 12 appliance
-(they do **not** depend on the `8000` template). Run only the ones you want:
+(they do **not** depend on the `8000` template). Run only the ones you want —
+except `lxc-gitea.sh`, which needs `lxc-db.sh` (CT `401`) up first:
 
 ```bash
 chmod +x lxc-db.sh lxc-network.sh lxc-monitoring.sh lxc-gitea.sh deploy-redis-lxc.sh
@@ -118,9 +119,17 @@ chmod +x lxc-db.sh lxc-network.sh lxc-monitoring.sh lxc-gitea.sh deploy-redis-lx
 ./lxc-db.sh           # CT 401 — Postgres 5432 + Redis 6379
 ./lxc-network.sh      # CT 402 — Pi-hole  http://<ip>/admin
 ./lxc-monitoring.sh   # CT 403 — Grafana :3000 (admin/admin), Prometheus :9090
-./lxc-gitea.sh        # CT 404 — Gitea    http://<ip>:3000
+./lxc-gitea.sh        # CT 404 — Gitea    http://<ip>:3000  (uses CT 401 PostgreSQL)
 ./deploy-redis-lxc.sh # CT 406 — standalone tuned Redis :6379
 ```
+
+`lxc-gitea.sh` creates a `gitea` PostgreSQL role + database inside CT `401`
+(`runuser -u postgres -- psql`), grants it `CREATE` on `public` (needed on
+PG 15+), verifies connectivity from CT `404`, then writes a `[database]` section
+into `/etc/gitea/app.ini` so the web installer is pre-pointed at
+`postgres@192.168.1.101:5432/gitea`. Set a real `DB_PASS` in the config block
+(and match it if you re-run). To move an existing SQLite instance instead, use
+`gitea dump` → `gitea restore` against the new DB rather than this script.
 
 `lxc-db.sh` opens PostgreSQL to `0.0.0.0/0` with `md5` auth and binds Redis to
 `0.0.0.0` — fine on a trusted VLAN, otherwise tighten `pg_hba.conf` / add a

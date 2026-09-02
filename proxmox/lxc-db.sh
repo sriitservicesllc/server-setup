@@ -1,39 +1,60 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+TEMPLATE_ID=8000
 CT_ID=401
 CT_NAME="db-postgres-redis"
-STORAGE="local-lvm"
 DISK_SIZE="16G"
 CORES=2
 MEMORY=2048
 IP_ADDR="192.168.1.101/24"
 GW="192.168.1.1"
 
-echo "[1/4] Creating Container $CT_ID..."
-pct create "$CT_ID" local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst \
-    --hostname "$CT_NAME" \
-    --cores "$CORES" --memory "$MEMORY" --swap 512 \
-    --rootfs "$STORAGE:$DISK_SIZE" \
+echo "[1/4] Cloning Container $CT_ID from Template $TEMPLATE_ID..."
+pct clone "$TEMPLATE_ID" "$CT_ID" --hostname "$CT_NAME" --full 1
+
+echo "[2/4] Applying specs and networking..."
+pct set "$CT_ID" \
+    --cores "$CORES" \
+    --memory "$MEMORY" \
+    --swap 512 \
     --net0 name=eth0,bridge=vmbr0,ip="$IP_ADDR",gw="$GW" \
-    --unprivileged 1 \
     --onboot 1
 
-echo "[2/4] Starting Container..."
+pct resize "$CT_ID" rootfs "$DISK_SIZE"
+
+echo "[3/4] Starting Container..."
 pct start "$CT_ID"
-sleep 5
+sleep 4
 
-echo "[3/4] Installing PostgreSQL and Redis..."
-pct exec "$CT_ID" -- apt update
-pct exec "$CT_ID" -- apt install -y postgresql postgresql-contrib redis-server curl
+echo "[4/4] Adding official PostgreSQL + Redis APT repos and installing latest versions..."
 
-echo "[4/4] Enabling external network listeners..."
-# Allow PostgreSQL to listen on all local interfaces
-pct exec "$CT_ID" -- sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/g" /etc/postgresql/16/main/postgresql.conf
-echo "host all all 0.0.0.0/0 md5" | pct exec "$CT_ID" -- tee -a /etc/postgresql/16/main/pg_hba.conf
+pct exec "$CT_ID" -- bash -c "
+    apt update && apt install -y curl ca-certificates lsb-release gnupg
 
-# Allow Redis to listen on all interfaces (protected mode enabled by default)
+    # 1. Official PostgreSQL (PGDG) Repository
+    install -d /etc/apt/keyrings
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor --yes -o /etc/apt/keyrings/postgresql.gpg
+    echo \"deb [signed-by=/etc/apt/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt \$(lsb_release -cs)-pgdg main\" > /etc/apt/sources.list.d/pgdg.list
+
+    # 2. Official Redis Repository
+    curl -fsSL https://packages.redis.io/gpg | gpg --dearmor --yes -o /usr/share/keyrings/redis-archive-keyring.gpg
+    echo \"deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb \$(lsb_release -cs) main\" > /etc/apt/sources.list.d/redis.list
+
+    # 3. Update index and install the latest versions
+    apt update
+    apt install -y postgresql postgresql-contrib redis
+"
+
+echo "Configuring network listeners and authentication..."
+# Locate whichever major PostgreSQL version was installed
+pct exec "$CT_ID" -- bash -c "sed -i \"s/#listen_addresses = 'localhost'/listen_addresses = '*'/g\" /etc/postgresql/*/main/postgresql.conf"
+pct exec "$CT_ID" -- bash -c "echo 'host all all 0.0.0.0/0 md5' >> /etc/postgresql/*/main/pg_hba.conf"
+
+# Configure latest Redis listener
 pct exec "$CT_ID" -- sed -i "s/^bind 127.0.0.1/bind 0.0.0.0/g" /etc/redis/redis.conf
 
+# Restart services
 pct exec "$CT_ID" -- systemctl restart postgresql redis-server
-echo "=== Database LXC ready at $IP_ADDR (Postgres: 5432, Redis: 6379) ==="
+
+echo "=== Database container deployed and listening on $IP_ADDR! ==="
