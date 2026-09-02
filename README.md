@@ -2,6 +2,11 @@
 
 > **Small Product Development Company Stack** | 1 Master + 3 Workers (configurable) | Bare-metal | 28-step automated setup | **100% Open Source**
 
+> **Provisioning the bare-metal hosts first?** See [`proxmox/README.md`](proxmox/README.md)
+> for Proxmox VE scripts that build KVM/LXC golden templates, batch-clone the
+> cluster nodes, stand up supporting service containers (Postgres, Redis,
+> Pi-hole, Prometheus/Grafana, Gitea), and automate snapshots + offsite backups.
+
 ---
 
 ## ✅ Open Source License Audit
@@ -898,6 +903,17 @@ server-setup/
 │   └── group_vars/
 │       ├── all.yml                     # ← All versions / settings
 │       └── vault.yml.template          # ← Secrets template (copy → encrypt)
+├── proxmox/                            # ← Proxmox VE host scripts — see proxmox/README.md
+│   ├── README.md                       #   VM/LXC template + service provisioning guide
+│   ├── create-proxmox-template.sh      #   KVM golden template (Ubuntu 24.04 + Cloud-Init)
+│   ├── deploy-proxmox-vms.sh           #   Batch-clone KVM VMs from template 9000
+│   ├── create-lxc-template.sh          #   LXC golden template (Debian 12)
+│   ├── deploy-lxc-batch.sh             #   Batch-clone LXC containers from template 8000
+│   ├── lxc-db.sh / lxc-network.sh      #   Service LXCs: Postgres+Redis, Pi-hole,
+│   ├── lxc-monitoring.sh / lxc-gitea.sh #  Prometheus+Grafana, Gitea
+│   ├── deploy-redis-lxc.sh             #   Standalone memory-tuned Redis LXC
+│   ├── lxc-backup-and-snapshot.sh      #   Scheduled snapshots + vzdump archives
+│   └── vzdump-rclone-hook.sh           #   Offsite backup sync via rclone
 └── roles/
     ├── preflight/          # 01 Pre-flight checks
     ├── common/             # 02 OS baseline
